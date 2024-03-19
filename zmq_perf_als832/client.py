@@ -15,8 +15,8 @@ def generate_test_matrix():
     sizes = [64 * 2 ** i for i in range(int(math.log2(10 * 2**20 / 64)) + 1)]
     zero_copies = [True, False]
     pubs = [True, False]
-    sndhwms = [0, 1000, 10000]
-    rcvhwms = [0, 1000, 10000]
+    sndhwms = [0]
+    rcvhwms = [0]
     sndtimeos = [1000]
     rcvtimeos = [1000]
 
