@@ -37,8 +37,20 @@ def thr(rep_url: str, src_url: str):
     print(f"Starting to send messages: count={config.count}, size={config.size}, zero-copy={config.zero_copy}, pub={config.pub}")
     data = b' ' * config.size
     copy = not config.zero_copy
+    timeout_limit = 100  # Maximum number of retries
+
     for i in range(config.count):
-        data_socket.send(data, copy=copy)
+        timeout_reached = 0  # Initialize timeout count
+        while True:
+            try:
+                data_socket.send(data, copy=copy)
+                break  # If send is successful, exit the while loop
+            except zmq.Again:
+                print("Buffer full, waiting to retry send")
+                timeout_reached += 1
+                if timeout_reached >= timeout_limit:
+                    print("Maximum retries reached, message sending aborted")
+                    break  # Exit the while loop after reaching the timeout limit
         
     data_socket.close()
     start_socket.close()
