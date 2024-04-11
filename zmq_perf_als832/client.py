@@ -1,13 +1,15 @@
 #!/usr/bin/env python
-import zmq
 import argparse
-import time
 import csv
-from .config_model import TestConfig  # Adjust import path as needed
 import json
 import math
-from itertools import product
 import os
+import time
+from itertools import product
+
+import zmq
+
+from .config_model import TestConfig  # Adjust import path as needed
 
 
 def generate_test_matrix():
@@ -21,12 +23,22 @@ def generate_test_matrix():
     rcvtimeos = [1000]
 
     # Compute the cartesian product of the parameter lists
-    test_combinations = product(counts, sizes, zero_copies, pubs, sndhwms, rcvhwms, sndtimeos, rcvtimeos)
+    test_combinations = product(
+        counts, sizes, zero_copies, pubs, sndhwms, rcvhwms, sndtimeos, rcvtimeos
+    )
 
     # Create a dictionary for each combination and append to test_matrix
     test_matrix = [
-        {'count': count, 'size': size, 'zero_copy': zero_copy, 'pub': pub,
-         'sndhwm': sndhwm, 'rcvhwm': rcvhwm, 'sndtimeo': sndtimeo, 'rcvtimeo': rcvtimeo}
+        {
+            "count": count,
+            "size": size,
+            "zero_copy": zero_copy,
+            "pub": pub,
+            "sndhwm": sndhwm,
+            "rcvhwm": rcvhwm,
+            "sndtimeo": sndtimeo,
+            "rcvtimeo": rcvtimeo,
+        }
         for count, size, zero_copy, pub, sndhwm, rcvhwm, sndtimeo, rcvtimeo in test_combinations
     ]
 
@@ -44,7 +56,7 @@ def run_test(server_ip: str, rep_port: int, data_port: int, config: TestConfig):
     # Setup data socket based on config
     if config.pub:
         data_socket = ctx.socket(zmq.SUB)
-        data_socket.setsockopt_string(zmq.SUBSCRIBE, '')
+        data_socket.setsockopt_string(zmq.SUBSCRIBE, "")
     else:
         data_socket = ctx.socket(zmq.PULL)
     data_socket.connect(f"tcp://{server_ip}:{data_port}")
@@ -67,7 +79,7 @@ def run_test(server_ip: str, rep_port: int, data_port: int, config: TestConfig):
             messages_received += 1
     except zmq.Again:
         print("Timeout reached. No more messages received.")
-    
+
     end_time = time.time()
     elapsed_time = end_time - start_time
     throughput = (messages_received * config.size * 8) / (elapsed_time * 1024 * 1024)
@@ -79,46 +91,68 @@ def run_test(server_ip: str, rep_port: int, data_port: int, config: TestConfig):
 
     # Return results
     return {
-        'config': config.model_dump(),
-        'messages_received': messages_received,
-        'elapsed_time': elapsed_time,
-        'throughput': throughput,
-        'start_time': start_time,
-        'end_time': end_time
+        "config": config.model_dump(),
+        "messages_received": messages_received,
+        "elapsed_time": elapsed_time,
+        "throughput": throughput,
+        "start_time": start_time,
+        "end_time": end_time,
     }
-    
+
+
 def load_existing_results(filename="test_results.json"):
     if os.path.exists(filename):
-        with open(filename, 'r') as f:
+        with open(filename, "r") as f:
             return json.load(f)
     else:
         return []
 
+
 def check_if_config_tested(config, existing_results):
     for result in existing_results:
-        if result['config'] == config.model_dump():
+        if result["config"] == config.model_dump():
             return True
     return False
 
+
 def save_results(results, filename="test_results.csv"):
-    with open(filename, 'w', newline='') as csvfile:
-        fieldnames = ['start_time', 'end_time', 'elapsed_time', 'throughput_mbps',
-                      'messages_received', 'count', 'size', 'zero_copy', 'pub']
+    with open(filename, "w", newline="") as csvfile:
+        fieldnames = [
+            "start_time",
+            "end_time",
+            "elapsed_time",
+            "throughput_mbps",
+            "messages_received",
+            "count",
+            "size",
+            "zero_copy",
+            "pub",
+        ]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
         writer.writeheader()
         for result in results:
-            config = result['config']
+            config = result["config"]
             row = {**result, **config}
-            del row['config']  # Remove the nested dictionary
+            del row["config"]  # Remove the nested dictionary
             writer.writerow(row)
-            
+
+
 def parse_args():
-    parser = argparse.ArgumentParser(description="Run the client part of a zmq performance test")
-    parser.add_argument("--server-ip", type=str, default="localhost", help="Server IP address")
-    parser.add_argument("--rep-port", type=int, default=5001, help="Port for setup communication")
-    parser.add_argument("--data-port", type=int, default=5002, help="Port for data communication")
+    parser = argparse.ArgumentParser(
+        description="Run the client part of a zmq performance test"
+    )
+    parser.add_argument(
+        "--server-ip", type=str, default="localhost", help="Server IP address"
+    )
+    parser.add_argument(
+        "--rep-port", type=int, default=5001, help="Port for setup communication"
+    )
+    parser.add_argument(
+        "--data-port", type=int, default=5002, help="Port for data communication"
+    )
     return parser.parse_args()
+
 
 def main():
     args = parse_args()
@@ -128,23 +162,24 @@ def main():
     results = []
     for config_dict in test_matrix:
         config = TestConfig(**config_dict)
-        
+
         # Check if this configuration has already been tested
         if check_if_config_tested(config, existing_results):
             print(f"Skipping already tested configuration: {config.model_dump()}")
             continue
-        
+
         # Run the test
         result = run_test(args.server_ip, args.rep_port, args.data_port, config)
-        
+
         # Add the result to the existing results
         existing_results.append(result)
-        
+
         # Save updated results after each test
-        with open('test_results.json', 'w') as f:
+        with open("test_results.json", "w") as f:
             json.dump(existing_results, f, indent=2)
 
         print(json.dumps(result, indent=2))
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
