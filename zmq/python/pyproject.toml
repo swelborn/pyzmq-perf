@@ -8,4 +8,12 @@ version = "0.1.0"
 description = "Python ZeroMQ Streaming Skeleton for Throughput Benchmarking"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["pyzmq>=27.0.0", "pydantic"]
+dependencies = [
+    "pyzmq>=27.0.0",
+    "typer>=0.16.0",
+    "pandas>=2.3.0",
+    "pydantic>=2.11.7",
+]
+
+[project.scripts]
+pyzmq-bench = "hpc_streaming_skeletons:app"
