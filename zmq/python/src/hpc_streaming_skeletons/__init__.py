@@ -42,16 +42,15 @@ ConfigFileT = Annotated[
 ]
 
 
-@app.command()
-def main(
-    role: RoleT,
-    coordinator: CoordT = False,
-    num_pairs: NumPairsT = None,
-    sender_bind: SenderBindT = None,
-    coordinator_ip: CoordinatorIpT = None,
-    short: ShortT = None,
-    log_level: LogLevelT = None,
-    config_file: ConfigFileT = None,
+def run(
+    role: Role,
+    coordinator: bool = False,
+    num_pairs: int | None = None,
+    sender_bind: bool | None = None,
+    coordinator_ip: str | None = None,
+    short: bool | None = None,
+    log_level: str | None = None,
+    config_file: str | None = None,
 ):
     """
     Run HPC Streaming Skeletons benchmark.
@@ -128,7 +127,7 @@ def main(
         f"🚀 Starting benchmark with [bold cyan]{len(test_matrix)}[/bold cyan] test configurations"
     )
     console.print(
-        f"📊 Using [bold cyan]{settings.num_pairs}[/bold cyan] sender/receiver pairs"
+        f"📊 Using [bold cyan]{settings.num_pairs}[/bold cyan] sender/receiver pair(s)"
     )
     console.print(
         f"🌐 Coordinator: [bold cyan]{settings.network.coordinator_ip}:{settings.network.coordinator_router_port}[/bold cyan]"
@@ -182,6 +181,52 @@ def main(
             if p.is_alive():
                 p.terminate()
                 p.join()
+
+
+@app.command()
+def sender(
+    coordinator: CoordT = False,
+    num_pairs: NumPairsT = None,
+    sender_bind: SenderBindT = None,
+    coordinator_ip: CoordinatorIpT = None,
+    short: ShortT = None,
+    log_level: LogLevelT = None,
+    config_file: ConfigFileT = None,
+):
+    """Run a sender worker."""
+    run(
+        role=Role.sender,
+        coordinator=coordinator,
+        num_pairs=num_pairs,
+        sender_bind=sender_bind,
+        coordinator_ip=coordinator_ip,
+        short=short,
+        log_level=log_level,
+        config_file=config_file,
+    )
+
+
+@app.command()
+def receiver(
+    coordinator: CoordT = False,
+    num_pairs: NumPairsT = None,
+    sender_bind: SenderBindT = None,
+    coordinator_ip: CoordinatorIpT = None,
+    short: ShortT = None,
+    log_level: LogLevelT = None,
+    config_file: ConfigFileT = None,
+):
+    """Run a receiver worker."""
+    run(
+        role=Role.receiver,
+        coordinator=coordinator,
+        num_pairs=num_pairs,
+        sender_bind=sender_bind,
+        coordinator_ip=coordinator_ip,
+        short=short,
+        log_level=log_level,
+        config_file=config_file,
+    )
 
 
 @app.command()
