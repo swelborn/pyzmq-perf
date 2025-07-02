@@ -5,6 +5,7 @@ import pathlib
 from typing import TYPE_CHECKING
 
 import pandas as pd
+from rich.logging import RichHandler
 
 import zmq
 from hpc_streaming_skeletons.models import (
@@ -28,9 +29,11 @@ if TYPE_CHECKING:
 def get_coordinator_logger(level=logging.INFO) -> logging.Logger:
     logger = logging.getLogger("coordinator")
     if not logger.hasHandlers():
-        handler = logging.StreamHandler()
+        handler = RichHandler(
+            rich_tracebacks=True, show_time=False, show_path=False, markup=False
+        )
         formatter = logging.Formatter(
-            "%(asctime)s [%(levelname)s] [coordinator] %(message)s"
+            "%(asctime)s [coordinator] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
         )
         handler.setFormatter(formatter)
         logger.addHandler(handler)

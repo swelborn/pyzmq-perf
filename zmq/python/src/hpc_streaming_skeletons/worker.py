@@ -5,6 +5,8 @@ import time
 # Import TYPE_CHECKING to avoid circular imports
 from typing import TYPE_CHECKING
 
+from rich.logging import RichHandler
+
 import zmq
 from hpc_streaming_skeletons.models import (
     CoordinationSignal,
@@ -25,9 +27,11 @@ if TYPE_CHECKING:
 def get_worker_logger(worker_id: str, level: int = logging.INFO) -> logging.Logger:
     logger = logging.getLogger(f"worker.{worker_id}")
     if not logger.hasHandlers():
-        handler = logging.StreamHandler()
+        handler = RichHandler(
+            rich_tracebacks=True, show_time=False, show_path=False, markup=False
+        )
         formatter = logging.Formatter(
-            f"%(asctime)s [%(levelname)s] [{worker_id}] %(message)s"
+            f"%(asctime)s [{worker_id}] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
         )
         handler.setFormatter(formatter)
         logger.addHandler(handler)
