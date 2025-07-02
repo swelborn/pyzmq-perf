@@ -1,6 +1,4 @@
 from pydantic import BaseModel
-
-
 class TestConfig(BaseModel):
     count: int  # number of messages to send
     size: int  # size of messages
@@ -8,5 +6,4 @@ class TestConfig(BaseModel):
     pub: bool  # true, use pub/sub. false, use push/pull
     rcvhwm: int  # puller hwm
     sndhwm: int  # sender hwm
-    sndtimeo: int  # timeout on sender
-    rcvtimeo: int  # timeout on puller
+    test_number: int
