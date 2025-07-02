@@ -24,17 +24,20 @@ if TYPE_CHECKING:
     from .settings import BenchmarkSettings
 
 
+logger = logging.getLogger("worker")
+
+
 def get_worker_logger(worker_id: str, level: int = logging.INFO) -> logging.Logger:
-    logger = logging.getLogger(f"worker.{worker_id}")
-    if not logger.hasHandlers():
-        handler = RichHandler(
-            rich_tracebacks=True, show_time=False, show_path=False, markup=False
-        )
-        formatter = logging.Formatter(
-            f"%(asctime)s [{worker_id}] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-        )
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
+    if logger.hasHandlers():
+        logger.handlers.clear()
+    handler = RichHandler(
+        rich_tracebacks=True, show_time=False, show_path=False, markup=False
+    )
+    formatter = logging.Formatter(
+        f"%(asctime)s [{worker_id}] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
     logger.propagate = False
     logger.setLevel(level)
     return logger
