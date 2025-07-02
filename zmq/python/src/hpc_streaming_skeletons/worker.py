@@ -2,6 +2,9 @@ import json
 import logging
 import time
 
+# Import TYPE_CHECKING to avoid circular imports
+from typing import TYPE_CHECKING
+
 import zmq
 from hpc_streaming_skeletons.models import (
     CoordinationSignal,
@@ -14,6 +17,9 @@ from hpc_streaming_skeletons.models import (
 )
 
 from .models import TestConfig
+
+if TYPE_CHECKING:
+    from .settings import BenchmarkSettings
 
 
 def get_worker_logger(worker_id: str, level: int = logging.INFO) -> logging.Logger:
@@ -41,18 +47,17 @@ def send_update(socket: zmq.Socket, worker_id: str, update: WorkerUpdate):
 def worker(
     role: Role,
     worker_id: str,
-    coordinator_ip: str,
-    sender_bind: bool,
-    log_level: int = logging.INFO,
+    settings: "BenchmarkSettings",
 ):
-    logger = get_worker_logger(worker_id, log_level)
+    logger = get_worker_logger(worker_id, settings.logging.get_level_int())
     ctx = zmq.Context()
 
     _worker_model = WorkerCreate(role=role, worker_id=worker_id)
 
     # Register with coordinator
     req_socket = ctx.socket(zmq.REQ)
-    req_socket.connect(f"tcp://{coordinator_ip}:5555")
+    coordinator_url = f"tcp://{settings.network.coordinator_ip}:{settings.network.coordinator_router_port}"
+    req_socket.connect(coordinator_url)
     req_socket.send(_worker_model.model_dump_json().encode())
 
     # Get peer info and sync address
@@ -60,14 +65,14 @@ def worker(
 
     setup_info = SetupInfo.model_validate_json(setup_info_raw)
     data_port = setup_info.data_port
-    sync_address = f"tcp://{coordinator_ip}:5556"
+    sync_address = f"tcp://{settings.network.coordinator_ip}:{settings.network.coordinator_pub_port}"
     logger.debug(f"Received setup info: \n{setup_info.model_dump_json(indent=2)}")
 
     # Subscribe to sync signals
     sub_socket = ctx.socket(zmq.SUB)
     sub_socket.connect(sync_address)
     sub_socket.setsockopt(zmq.SUBSCRIBE, b"")
-    time.sleep(1)
+    time.sleep(settings.worker.setup_delay_s)
 
     logger.debug("connected to coordinator and sync channel.")
 
@@ -92,20 +97,24 @@ def worker(
         if role == Role.sender:
             data_socket = ctx.socket(zmq.PUB if config.pub else zmq.PUSH)
             data_socket.setsockopt(zmq.SNDHWM, config.sndhwm)
-            if sender_bind:
+            if settings.worker.sender_bind:
                 data_socket.bind(f"tcp://*:{data_port}")
             else:
-                data_socket.connect(f"tcp://{coordinator_ip}:{data_port}")
+                data_socket.connect(
+                    f"tcp://{settings.network.coordinator_ip}:{data_port}"
+                )
         else:
             data_socket = ctx.socket(zmq.SUB if config.pub else zmq.PULL)
             if config.pub:
                 data_socket.setsockopt_string(zmq.SUBSCRIBE, "")
             data_socket.setsockopt(zmq.RCVHWM, config.rcvhwm)
-            if not sender_bind:
+            if not settings.worker.sender_bind:
                 data_socket.bind(f"tcp://*:{data_port}")
             else:
-                data_socket.connect(f"tcp://{coordinator_ip}:{data_port}")
-        time.sleep(1)  # Allow time for connections to establish
+                data_socket.connect(
+                    f"tcp://{settings.network.coordinator_ip}:{data_port}"
+                )
+        time.sleep(settings.worker.setup_delay_s)
 
         # Signal ready
         update = WorkerUpdate(

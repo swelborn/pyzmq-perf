@@ -1,4 +1,8 @@
 import logging
+import pathlib
+
+# Import TYPE_CHECKING to avoid circular imports
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
@@ -16,6 +20,9 @@ from hpc_streaming_skeletons.models import (
 from hpc_streaming_skeletons.utils import req_poll, validate_msg
 
 from .models import TestConfig
+
+if TYPE_CHECKING:
+    from .settings import BenchmarkSettings
 
 
 def get_coordinator_logger(level=logging.INFO) -> logging.Logger:
@@ -115,7 +122,11 @@ def update_worker(
 
 
 def register_worker(
-    id: bytes, msg_bytes: bytes, registry: WorkerRegistry, router_socket: zmq.Socket
+    id: bytes,
+    msg_bytes: bytes,
+    registry: WorkerRegistry,
+    router_socket: zmq.Socket,
+    settings: "BenchmarkSettings",
 ):
     _worker = validate_msg(msg_bytes, WorkerCreate)
     _worker = Worker(id=id, **_worker.model_dump())
@@ -125,7 +136,7 @@ def register_worker(
     if not registry.able_to_pair():
         return
 
-    data_port = 6000 + registry.num_pairs
+    data_port = settings.network.data_port_start + registry.num_pairs
     sender = registry.unpaired_senders[0]
     receiver = registry.unpaired_receivers[0]
 
@@ -149,6 +160,7 @@ def wait_for_workers_state(
     registry: WorkerRegistry,
     poller: zmq.Poller,
     router_socket: zmq.Socket,
+    settings: "BenchmarkSettings",
     test_results: list[TestResult] | None = None,
 ):
     while not (
@@ -161,7 +173,7 @@ def wait_for_workers_state(
         update_worker(id, msg_bytes, registry, router_socket, test_results)
 
 
-def save_results(results, filename="test_results.csv"):
+def save_results(results: list[TestResult], filename: pathlib.Path):
     if not results:
         print("No results to save.")
         return
@@ -170,24 +182,24 @@ def save_results(results, filename="test_results.csv"):
     logger.info(f"Results saved to {filename}")
 
 
-def coordinator(num_pairs: int, test_matrix: list[dict], log_level: int = logging.INFO):
-    logger = get_coordinator_logger(log_level)
+def coordinator(settings: "BenchmarkSettings", test_matrix: list[dict]):
+    logger = get_coordinator_logger(settings.logging.get_level_int())
     ctx = zmq.Context()
 
     router_socket = ctx.socket(zmq.ROUTER)
-    router_socket.bind("tcp://*:5555")
+    router_socket.bind(f"tcp://*:{settings.network.coordinator_router_port}")
 
     pub_socket = ctx.socket(zmq.PUB)
-    pub_socket.bind("tcp://*:5556")
+    pub_socket.bind(f"tcp://*:{settings.network.coordinator_pub_port}")
 
     registry = WorkerRegistry()
 
-    logger.info(f"Waiting for {num_pairs * 2} workers to register and pair...")
+    logger.info(f"Waiting for {settings.num_pairs * 2} workers to register and pair...")
 
     poller = zmq.Poller()
     poller.register(router_socket, zmq.POLLIN)
 
-    while registry.num_pairs < num_pairs or not registry.check_all_state(
+    while registry.num_pairs < settings.num_pairs or not registry.check_all_state(
         WorkerState.CONNECTED_TO_SYNC
     ):
         if not req_poll(poller, router_socket):
@@ -197,7 +209,7 @@ def coordinator(num_pairs: int, test_matrix: list[dict], log_level: int = loggin
         id, _, msg_bytes = router_socket.recv_multipart()
 
         if id not in registry:
-            register_worker(id, msg_bytes, registry, router_socket)
+            register_worker(id, msg_bytes, registry, router_socket, settings)
             logger.info(
                 f"Registered {registry.num_workers} workers, {registry.num_pairs} pairs."
             )
@@ -229,6 +241,7 @@ def coordinator(num_pairs: int, test_matrix: list[dict], log_level: int = loggin
             registry=registry,
             poller=poller,
             router_socket=router_socket,
+            settings=settings,
         )
         logger.info("All workers have received the config.")
 
@@ -238,6 +251,7 @@ def coordinator(num_pairs: int, test_matrix: list[dict], log_level: int = loggin
             registry=registry,
             poller=poller,
             router_socket=router_socket,
+            settings=settings,
         )
         logger.info("All workers are ready for the test.")
 
@@ -250,6 +264,7 @@ def coordinator(num_pairs: int, test_matrix: list[dict], log_level: int = loggin
             registry=registry,
             poller=poller,
             router_socket=router_socket,
+            settings=settings,
             test_results=test_results,
         )
         logger.info("All workers have finished the test.")
@@ -261,5 +276,7 @@ def coordinator(num_pairs: int, test_matrix: list[dict], log_level: int = loggin
     logger.info("All tests complete. Shutting down workers.")
     pub_socket.send_multipart([CoordinationSignal.FINISH.value.encode(), b""])
 
-    save_results([r.model_dump() for r in all_results])
+    save_results(
+        [r.model_dump() for r in all_results], filename=settings.output.results_file
+    )
     ctx.destroy()

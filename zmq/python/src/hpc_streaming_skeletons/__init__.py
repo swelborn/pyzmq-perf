@@ -1,59 +1,44 @@
 import multiprocessing
-from itertools import product
-from typing import Annotated
+from typing import Annotated, Optional
 
 import typer
+from rich.console import Console
 
 from hpc_streaming_skeletons.coordinator import coordinator as _coordinator
 from hpc_streaming_skeletons.models import Role
+from hpc_streaming_skeletons.settings import BenchmarkSettings
 from hpc_streaming_skeletons.worker import worker
 
-app = typer.Typer()
+app = typer.Typer(
+    help="HPC Streaming Skeletons: High-performance ZeroMQ benchmarking tool",
+    rich_markup_mode="rich",
+)
 
 
-def generate_test_matrix(short_test: bool = False):
-    if short_test:
-        counts = [100001]
-        sizes = [64, 256]
-        zero_copies = [False]
-        pubs = [False]
-        sndhwms = [100]
-        rcvhwms = [100]
-    else:
-        counts = [100001]
-        sizes = [64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 10485760]
-        max_size = 10 * 2**20  # 10 MiB
-        sizes = [size for size in sizes if size <= max_size]  # threshold
-        zero_copies = [True, False]
-        pubs = [False]
-        sndhwms = [100]
-        rcvhwms = [100]
-
-    test_combinations = product(counts, sizes, zero_copies, pubs, sndhwms, rcvhwms)
-
-    test_matrix = [
-        {
-            "count": count,
-            "size": size,
-            "zero_copy": zero_copy,
-            "pub": pub,
-            "sndhwm": sndhwm,
-            "rcvhwm": rcvhwm,
-        }
-        for count, size, zero_copy, pub, sndhwm, rcvhwm in test_combinations
-    ]
-
-    return test_matrix
-
-
-RoleT = Annotated[Role, typer.Option(help="sender or receiver")]
-CoordT = Annotated[bool, typer.Option(help="coordinator node or worker-only node")]
-NumPairsT = Annotated[int, typer.Option(help="Number of sender/receiver pairs")]
-SenderBindT = Annotated[bool, typer.Option(help="Senders bind, receivers connect")]
-CoordinatorIpT = Annotated[str, typer.Option(help="IP address for the coordinator")]
-ShortT = Annotated[bool, typer.Option(help="Use a few small sizes for quick tests")]
+# Type annotations for CLI options
+RoleT = Annotated[Role, typer.Option(help="Worker role: sender or receiver")]
+CoordT = Annotated[bool, typer.Option(help="Run coordinator on this node")]
+NumPairsT = Annotated[
+    Optional[int],
+    typer.Option(help="Number of sender/receiver pairs"),
+]
+SenderBindT = Annotated[
+    Optional[bool],
+    typer.Option(help="Senders bind to ports, receivers connect"),
+]
+CoordinatorIpT = Annotated[
+    Optional[str], typer.Option(help="IP address of the coordinator")
+]
+ShortT = Annotated[
+    Optional[bool],
+    typer.Option(help="Use reduced test matrix for quick testing"),
+]
 LogLevelT = Annotated[
-    str, typer.Option(help="Logging level (DEBUG, INFO, WARNING, ERROR)")
+    Optional[str],
+    typer.Option(help="Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL"),
+]
+ConfigFileT = Annotated[
+    Optional[str], typer.Option(help="Path to .env configuration file (default: .env)")
 ]
 
 
@@ -61,33 +46,210 @@ LogLevelT = Annotated[
 def main(
     role: RoleT,
     coordinator: CoordT = False,
-    num_pairs: NumPairsT = 1,
-    sender_bind: SenderBindT = False,
-    coordinator_ip: CoordinatorIpT = "127.0.0.1",
-    short: ShortT = False,
-    log_level: LogLevelT = "INFO",
+    num_pairs: NumPairsT = None,
+    sender_bind: SenderBindT = None,
+    coordinator_ip: CoordinatorIpT = None,
+    short: ShortT = None,
+    log_level: LogLevelT = None,
+    config_file: ConfigFileT = None,
 ):
-    matrix = generate_test_matrix(short_test=short)
+    """
+    Run HPC Streaming Skeletons benchmark.
+
+    This tool coordinates high-performance ZeroMQ benchmarks between sender and receiver workers.
+    Configuration is loaded from environment variables, .env files, and can be overridden by CLI flags.
+
+    Examples:
+
+    Run coordinator with 2 pairs:
+        pyzmq-bench sender --coordinator --num-pairs 2
+
+    Run worker connecting to remote coordinator:
+        pyzmq-bench receiver --coordinator-ip 192.168.1.100
+
+    Quick test with custom log level:
+        pyzmq-bench sender --coordinator --short --log-level DEBUG
+    """
+
+    # Load settings from environment/config file
+    if config_file:
+        # Create settings with custom env file
+        from pydantic_settings import SettingsConfigDict
+
+        class CustomSettings(BenchmarkSettings):
+            model_config = SettingsConfigDict(
+                env_file=config_file,
+                env_file_encoding="utf-8",
+                env_prefix="PYZMQ_BENCH_",
+                env_nested_delimiter="__",
+                extra="ignore",
+            )
+
+        settings = CustomSettings()
+    else:
+        # Load settings from default locations
+        settings = BenchmarkSettings()
+
+    # Override settings with CLI arguments (only if explicitly provided)
+    overrides = {}
+    if num_pairs is not None:
+        overrides["num_pairs"] = num_pairs
+    if short is not None:
+        overrides["short_test"] = short
+    if log_level is not None:
+        overrides["logging"] = {"level": log_level}
+    if coordinator_ip is not None:
+        overrides["network"] = {"coordinator_ip": coordinator_ip}
+    if sender_bind is not None:
+        overrides["worker"] = {"sender_bind": sender_bind}
+
+    # Apply CLI overrides if any were provided
+    if overrides:
+        # Create new settings instance with overrides
+        current_settings = settings.model_dump()
+
+        # Deep merge overrides
+        for key, value in overrides.items():
+            if isinstance(value, dict) and key in current_settings:
+                current_settings[key].update(value)
+            else:
+                current_settings[key] = value
+
+        settings = BenchmarkSettings(**current_settings)
+
+    # Configure logging based on final settings
+    settings.configure_logging()
+
+    # Generate test matrix based on settings
+    test_matrix = settings.get_test_matrix()
+
+    console = Console()
+    console.print(
+        f"🚀 Starting benchmark with [bold cyan]{len(test_matrix)}[/bold cyan] test configurations"
+    )
+    console.print(
+        f"📊 Using [bold cyan]{settings.num_pairs}[/bold cyan] sender/receiver pairs"
+    )
+    console.print(
+        f"🌐 Coordinator: [bold cyan]{settings.network.coordinator_ip}:{settings.network.coordinator_router_port}[/bold cyan]"
+    )
+
     processes = []
 
     if coordinator:
+        console.print("🎯 Starting coordinator process...")
         coordinator_process = multiprocessing.Process(
-            target=_coordinator, args=(num_pairs, matrix, log_level)
+            target=_coordinator, args=(settings, test_matrix)
         )
         processes.append(coordinator_process)
 
-    for i in range(num_pairs):
+    console.print(
+        f"👥 Starting [bold cyan]{settings.num_pairs}[/bold cyan] [bold cyan]{role.value}[/bold cyan] worker(s)..."
+    )
+    for i in range(settings.num_pairs):
         worker_id = f"{role.value}-{i}"
         p = multiprocessing.Process(
             target=worker,
-            args=(role, worker_id, coordinator_ip, sender_bind, log_level),
+            args=(role, worker_id, settings),
         )
         processes.append(p)
 
+    # Start all processes
     for p in processes:
         p.start()
 
-    for p in processes:
-        p.join()
+    try:
+        # Wait for all processes to complete
+        for p in processes:
+            p.join()
 
-    print("Benchmark processes finished on this node.")
+        console.print(
+            "✅ [bold green]Benchmark processes finished successfully[/bold green]"
+        )
+
+        if coordinator:
+            console.print(
+                f"📄 Results saved to: [bold cyan]{settings.output.results_file}[/bold cyan]"
+            )
+            if settings.output.plot_output_file:
+                console.print(
+                    f"📈 Plot saved to: [bold cyan]{settings.output.plot_output_file}[/bold cyan]"
+                )
+
+    except KeyboardInterrupt:
+        console.print("🛑 [bold red]Benchmark interrupted by user[/bold red]")
+        for p in processes:
+            if p.is_alive():
+                p.terminate()
+                p.join()
+
+
+@app.command()
+def config(
+    config_file: ConfigFileT = None,
+):
+    """Show current configuration settings."""
+    console = Console()
+
+    if config_file:
+        # Create settings with custom env file
+        from pydantic_settings import SettingsConfigDict
+
+        class CustomSettings(BenchmarkSettings):
+            model_config = SettingsConfigDict(
+                env_file=config_file,
+                env_file_encoding="utf-8",
+                env_prefix="PYZMQ_BENCH_",
+                env_nested_delimiter="__",
+                extra="ignore",
+            )
+
+        settings = CustomSettings()
+    else:
+        settings = BenchmarkSettings()
+
+    console.print("📋 Current Configuration:")
+    console.print("=" * 50)
+
+    # Display settings in a formatted way
+    config_dict = settings.model_dump()
+
+    def print_section(name: str, data: dict, indent: int = 0):
+        prefix = "  " * indent
+        console.print(f"{prefix}[bold cyan]{name.upper()}[/bold cyan]")
+        for key, value in data.items():
+            if isinstance(value, dict):
+                print_section(key, value, indent + 1)
+            else:
+                console.print(f"{prefix}  {key}: [green]{value}[/green]")
+        if indent == 0:
+            console.print()
+
+    for section_name, section_data in config_dict.items():
+        if isinstance(section_data, dict):
+            print_section(section_name, section_data)
+        else:
+            console.print(
+                f"[bold cyan]{section_name.upper()}[/bold cyan]: [green]{section_data}[/green]"
+            )
+
+
+@app.command()
+def validate():
+    """Validate configuration settings."""
+    console = Console()
+
+    try:
+        settings = BenchmarkSettings()
+        console.print("✅ Configuration is valid!")
+
+        # Show some derived values
+        test_matrix = settings.get_test_matrix()
+        console.print(f"📊 Generated {len(test_matrix)} test configurations")
+
+        filtered_sizes = settings.test_matrix.get_filtered_message_sizes()
+        console.print(f"📦 Message sizes (filtered): {filtered_sizes}")
+
+    except Exception as e:
+        console.print(f"❌ Configuration validation failed: {e}", style="red")
+        raise typer.Exit(1)
