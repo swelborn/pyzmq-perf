@@ -13,7 +13,10 @@ dependencies = [
     "typer>=0.16.0",
     "pandas>=2.3.0",
     "pydantic>=2.11.7",
+    "seaborn>=0.13.2",
+    "matplotlib>=3.10.3",
 ]
 
 [project.scripts]
 pyzmq-bench = "hpc_streaming_skeletons:app"
+pyzmq-plot = "hpc_streaming_skeletons.plot:main"
