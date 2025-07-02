@@ -105,22 +105,26 @@ def worker(
             data_socket = ctx.socket(zmq.PUB if config.pub else zmq.PUSH)
             data_socket.setsockopt(zmq.SNDHWM, config.sndhwm)
             if settings.worker.sender_bind:
-                data_socket.bind(f"tcp://*:{data_port}")
+                addr = f"tcp://*:{data_port}"
+                data_socket.bind(addr)
+                logger.debug(f"Bound to {addr}.")
             else:
-                data_socket.connect(
-                    f"tcp://{settings.network.coordinator_ip}:{data_port}"
-                )
+                addr = f"tcp://{settings.network.coordinator_ip}:{data_port}"
+                data_socket.connect(addr)
+                logger.debug(f"Connected to {addr}.")
         else:
             data_socket = ctx.socket(zmq.SUB if config.pub else zmq.PULL)
             if config.pub:
                 data_socket.setsockopt_string(zmq.SUBSCRIBE, "")
             data_socket.setsockopt(zmq.RCVHWM, config.rcvhwm)
             if not settings.worker.sender_bind:
-                data_socket.bind(f"tcp://*:{data_port}")
+                addr = f"tcp://*:{data_port}"
+                data_socket.bind(addr)
+                logger.debug(f"Bound to {addr}.")
             else:
-                data_socket.connect(
-                    f"tcp://{settings.network.coordinator_ip}:{data_port}"
-                )
+                addr = f"tcp://{settings.network.coordinator_ip}:{data_port}"
+                data_socket.connect(addr)
+                logger.debug(f"Connected to {addr}.")
         time.sleep(settings.worker.setup_delay_s)
 
         # Signal ready
