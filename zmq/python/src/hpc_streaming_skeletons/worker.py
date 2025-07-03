@@ -12,29 +12,32 @@ from hpc_streaming_skeletons.models import (
     CoordinationSignal,
     Role,
     SetupInfo,
+    TestConfig,
     TestResult,
     WorkerCreate,
     WorkerState,
     WorkerUpdate,
 )
-
-from .models import TestConfig
+from hpc_streaming_skeletons.utils import calculate_throughput
 
 if TYPE_CHECKING:
     from .settings import BenchmarkSettings
 
 
+logger = logging.getLogger("worker")
+
+
 def get_worker_logger(worker_id: str, level: int = logging.INFO) -> logging.Logger:
-    logger = logging.getLogger(f"worker.{worker_id}")
-    if not logger.hasHandlers():
-        handler = RichHandler(
-            rich_tracebacks=True, show_time=False, show_path=False, markup=False
-        )
-        formatter = logging.Formatter(
-            f"%(asctime)s [{worker_id}] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-        )
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
+    if logger.hasHandlers():
+        logger.handlers.clear()
+    handler = RichHandler(
+        rich_tracebacks=True, show_time=False, show_path=False, markup=False
+    )
+    formatter = logging.Formatter(
+        f"%(asctime)s [{worker_id}] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
     logger.propagate = False
     logger.setLevel(level)
     return logger
@@ -102,22 +105,26 @@ def worker(
             data_socket = ctx.socket(zmq.PUB if config.pub else zmq.PUSH)
             data_socket.setsockopt(zmq.SNDHWM, config.sndhwm)
             if settings.worker.sender_bind:
-                data_socket.bind(f"tcp://*:{data_port}")
+                addr = f"tcp://*:{data_port}"
+                data_socket.bind(addr)
+                logger.debug(f"Bound to {addr}.")
             else:
-                data_socket.connect(
-                    f"tcp://{settings.network.coordinator_ip}:{data_port}"
-                )
+                addr = f"tcp://{settings.network.coordinator_ip}:{data_port}"
+                data_socket.connect(addr)
+                logger.debug(f"Connected to {addr}.")
         else:
             data_socket = ctx.socket(zmq.SUB if config.pub else zmq.PULL)
             if config.pub:
                 data_socket.setsockopt_string(zmq.SUBSCRIBE, "")
             data_socket.setsockopt(zmq.RCVHWM, config.rcvhwm)
             if not settings.worker.sender_bind:
-                data_socket.bind(f"tcp://*:{data_port}")
+                addr = f"tcp://*:{data_port}"
+                data_socket.bind(addr)
+                logger.debug(f"Bound to {addr}.")
             else:
-                data_socket.connect(
-                    f"tcp://{settings.network.coordinator_ip}:{data_port}"
-                )
+                addr = f"tcp://{settings.network.coordinator_ip}:{data_port}"
+                data_socket.connect(addr)
+                logger.debug(f"Connected to {addr}.")
         time.sleep(settings.worker.setup_delay_s)
 
         # Signal ready
@@ -154,15 +161,6 @@ def worker(
     ctx.destroy()
 
 
-def calculate_throughput(
-    messages: int, size: int, start_time: float, end_time: float
-) -> float:
-    elapsed_time = end_time - start_time
-    if elapsed_time <= 0:
-        return 0.0
-    return (messages * size * 8) / (elapsed_time * 1024 * 1024)  # Mbps
-
-
 def run_test(role: Role, config: TestConfig, data_socket: zmq.Socket):
     data = b" " * config.size
     copy = not config.zero_copy
@@ -180,7 +178,12 @@ def run_test(role: Role, config: TestConfig, data_socket: zmq.Socket):
         throughput = calculate_throughput(
             messages_sent, config.size, start_time, end_time
         )
-        return {"messages_sent": messages_sent, "throughput_mbps": throughput}
+        return {
+            "messages_sent": messages_sent,
+            "throughput_mbps": throughput,
+            "start_time": start_time,
+            "end_time": end_time,
+        }
 
     def receive():
         start_time = 0.0
@@ -197,7 +200,12 @@ def run_test(role: Role, config: TestConfig, data_socket: zmq.Socket):
         throughput = calculate_throughput(
             messages_received, config.size, start_time, end_time
         )
-        return {"messages_received": messages_received, "throughput_mbps": throughput}
+        return {
+            "messages_received": messages_received,
+            "throughput_mbps": throughput,
+            "start_time": start_time,
+            "end_time": end_time,
+        }
 
     method_map = {
         Role.sender: send,
