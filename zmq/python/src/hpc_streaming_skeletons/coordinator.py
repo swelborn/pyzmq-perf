@@ -224,7 +224,7 @@ def coordinator(settings: "BenchmarkSettings", test_matrix: list[dict]):
     logger.info("All workers have been paired.")
 
     logger.info("Starting test execution loop.")
-    all_results = []
+    all_results: list[TestResult] = []
     test_results: list[TestResult] = []
 
     for i, test_config_dict in enumerate(test_matrix):
