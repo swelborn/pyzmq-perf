@@ -179,7 +179,7 @@ def wait_for_workers_state(
 
 def save_results(results: list[dict[str, Any]], file: pathlib.Path):
     if not results:
-        print("No results to save.")
+        logger.info("No results to save.")
         return
     file.parent.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame(results)
