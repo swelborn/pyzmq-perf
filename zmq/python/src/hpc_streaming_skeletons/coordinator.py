@@ -187,6 +187,13 @@ def save_results(results: list[dict[str, Any]], file: pathlib.Path):
     logger.info(f"Results saved to {file}")
 
 
+def save_settings(settings: "BenchmarkSettings", file: pathlib.Path):
+    file.parent.mkdir(parents=True, exist_ok=True)
+    with file.open("w") as f:
+        f.write(settings.model_dump_json(indent=2))
+    logger.info(f"Settings saved to {file}")
+
+
 def coordinator(settings: "BenchmarkSettings", test_matrix: list[dict]):
     logger = get_coordinator_logger(settings.logging.get_level_int())
     ctx = zmq.Context()
@@ -281,10 +288,13 @@ def coordinator(settings: "BenchmarkSettings", test_matrix: list[dict]):
     logger.info("All tests complete. Shutting down workers.")
     pub_socket.send_multipart([CoordinationSignal.FINISH.value.encode(), b""])
 
-    file = settings.output.results_file
+    results_file = settings.output.results_file
+    config_file = settings.output.config_file
     if settings.output.add_date_time:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        file = file.with_name(f"{timestamp}_{file.name}")
+        results_file = results_file.with_name(f"{timestamp}_{results_file.name}")
+        config_file = config_file.with_name(f"{timestamp}_{config_file.name}")
 
-    save_results([r.model_dump() for r in all_results], file=file)
+    save_results([r.model_dump() for r in all_results], file=results_file)
+    save_settings(settings, file=config_file)
     ctx.destroy()

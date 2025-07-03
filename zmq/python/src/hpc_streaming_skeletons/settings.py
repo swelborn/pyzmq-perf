@@ -127,6 +127,10 @@ class OutputSettings(BaseModel):
         default=Path("out/results.csv"),
         description="Path to save test results CSV file",
     )
+    config_file: Path = Field(
+        default=Path("out/config.json"),
+        description="Path to save test configuration JSON file",
+    )
     plot_show: bool = Field(
         default=False, description="Whether to display plots interactively"
     )
