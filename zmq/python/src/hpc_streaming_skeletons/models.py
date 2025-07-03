@@ -36,6 +36,8 @@ class TestResult(BaseModel):
     messages_sent: int | None = None
     messages_received: int | None = None
     throughput_mbps: float
+    start_time: float
+    end_time: float
 
 
 class WorkerState(str, Enum):

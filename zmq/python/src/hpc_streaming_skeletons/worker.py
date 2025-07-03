@@ -12,6 +12,7 @@ from hpc_streaming_skeletons.models import (
     CoordinationSignal,
     Role,
     SetupInfo,
+    TestConfig,
     TestResult,
     WorkerCreate,
     WorkerState,
@@ -187,7 +188,12 @@ def run_test(role: Role, config: TestConfig, data_socket: zmq.Socket):
         throughput = calculate_throughput(
             messages_sent, config.size, start_time, end_time
         )
-        return {"messages_sent": messages_sent, "throughput_mbps": throughput}
+        return {
+            "messages_sent": messages_sent,
+            "throughput_mbps": throughput,
+            "start_time": start_time,
+            "end_time": end_time,
+        }
 
     def receive():
         start_time = 0.0
@@ -204,7 +210,12 @@ def run_test(role: Role, config: TestConfig, data_socket: zmq.Socket):
         throughput = calculate_throughput(
             messages_received, config.size, start_time, end_time
         )
-        return {"messages_received": messages_received, "throughput_mbps": throughput}
+        return {
+            "messages_received": messages_received,
+            "throughput_mbps": throughput,
+            "start_time": start_time,
+            "end_time": end_time,
+        }
 
     method_map = {
         Role.sender: send,
