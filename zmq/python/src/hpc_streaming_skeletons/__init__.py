@@ -9,6 +9,8 @@ from hpc_streaming_skeletons.models import Role
 from hpc_streaming_skeletons.settings import BenchmarkSettings
 from hpc_streaming_skeletons.worker import worker
 
+from .plot import plot
+
 app = typer.Typer(
     help="HPC Streaming Skeletons: High-performance ZeroMQ benchmarking tool",
     rich_markup_mode="rich",
@@ -170,10 +172,6 @@ def run(
             console.print(
                 f"📄 Results saved to: [bold cyan]{settings.output.results_file}[/bold cyan]"
             )
-            if settings.output.plot_output_file:
-                console.print(
-                    f"📈 Plot saved to: [bold cyan]{settings.output.plot_output_file}[/bold cyan]"
-                )
 
     except KeyboardInterrupt:
         console.print("🛑 [bold red]Benchmark interrupted by user[/bold red]")
@@ -279,22 +277,4 @@ def config(
             )
 
 
-@app.command()
-def validate():
-    """Validate configuration settings."""
-    console = Console()
-
-    try:
-        settings = BenchmarkSettings()
-        console.print("✅ Configuration is valid!")
-
-        # Show some derived values
-        test_matrix = settings.get_test_matrix()
-        console.print(f"📊 Generated {len(test_matrix)} test configurations")
-
-        filtered_sizes = settings.test_matrix.get_filtered_message_sizes()
-        console.print(f"📦 Message sizes (filtered): {filtered_sizes}")
-
-    except Exception as e:
-        console.print(f"❌ Configuration validation failed: {e}", style="red")
-        raise typer.Exit(1)
+app.command()(plot)
