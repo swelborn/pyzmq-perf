@@ -1,8 +1,9 @@
 import logging
 import pathlib
+from datetime import datetime
 
 # Import TYPE_CHECKING to avoid circular imports
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 from rich.logging import RichHandler
@@ -176,13 +177,14 @@ def wait_for_workers_state(
         update_worker(id, msg_bytes, registry, router_socket, test_results)
 
 
-def save_results(results: list[TestResult], filename: pathlib.Path):
+def save_results(results: list[dict[str, Any]], file: pathlib.Path):
     if not results:
         print("No results to save.")
         return
+    file.parent.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame(results)
-    df.to_csv(filename, index=False)
-    logger.info(f"Results saved to {filename}")
+    df.to_csv(file, index=False)
+    logger.info(f"Results saved to {file}")
 
 
 def coordinator(settings: "BenchmarkSettings", test_matrix: list[dict]):
@@ -279,7 +281,10 @@ def coordinator(settings: "BenchmarkSettings", test_matrix: list[dict]):
     logger.info("All tests complete. Shutting down workers.")
     pub_socket.send_multipart([CoordinationSignal.FINISH.value.encode(), b""])
 
-    save_results(
-        [r.model_dump() for r in all_results], filename=settings.output.results_file
-    )
+    file = settings.output.results_file
+    if settings.output.add_date_time:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file = file.with_name(f"{timestamp}_{file.name}")
+
+    save_results([r.model_dump() for r in all_results], file=file)
     ctx.destroy()

@@ -119,13 +119,13 @@ class WorkerSettings(BaseModel):
 
 
 class OutputSettings(BaseModel):
-    results_file: Path = Field(
-        default=Path("test_results.csv"),
-        description="Path to save test results CSV file",
+    add_date_time: bool = Field(
+        default=True,
+        description="Whether to add date/time prefix to output files",
     )
-    plot_output_file: Path | None = Field(
-        default=Path("throughput_plot.png"),
-        description="Path to save throughput plot (None to disable)",
+    results_file: Path = Field(
+        default=Path("out/results.csv"),
+        description="Path to save test results CSV file",
     )
     plot_show: bool = Field(
         default=False, description="Whether to display plots interactively"
@@ -133,10 +133,12 @@ class OutputSettings(BaseModel):
     plot_figure_size: tuple[float, float] = Field(
         default=(10, 6), description="Figure size for plots as (width, height)"
     )
-    save_intermediate_results: bool = Field(
-        default=True,
-        description="Whether to save results after each test (vs only at the end)",
-    )
+
+    @field_validator("results_file")
+    def validate_results_file(cls, v: Path) -> Path:
+        if v.suffix != ".csv":
+            raise ValueError("Results file must have .csv extension")
+        return v
 
 
 class BenchmarkSettings(BaseSettings):
