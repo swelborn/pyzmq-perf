@@ -18,8 +18,7 @@ from hpc_streaming_skeletons.models import (
     WorkerState,
     WorkerUpdate,
 )
-
-from .models import TestConfig
+from hpc_streaming_skeletons.utils import calculate_throughput
 
 if TYPE_CHECKING:
     from .settings import BenchmarkSettings
@@ -160,15 +159,6 @@ def worker(
 
     logger.info("Shutting down.")
     ctx.destroy()
-
-
-def calculate_throughput(
-    messages: int, size: int, start_time: float, end_time: float
-) -> float:
-    elapsed_time = end_time - start_time
-    if elapsed_time <= 0:
-        return 0.0
-    return (messages * size * 8) / (elapsed_time * 1024 * 1024)  # Mbps
 
 
 def run_test(role: Role, config: TestConfig, data_socket: zmq.Socket):

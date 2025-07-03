@@ -20,3 +20,12 @@ def req_poll(poller: zmq.Poller, socket: zmq.Socket, timeout_ms: int = 1000) -> 
         return False
 
     return True
+
+
+def calculate_throughput(
+    messages: int, size: int, start_time: float, end_time: float
+) -> float:
+    elapsed_time = end_time - start_time
+    if elapsed_time <= 0:
+        return 0.0
+    return (messages * size * 8) / (elapsed_time * 1024 * 1024)  # Mbps
