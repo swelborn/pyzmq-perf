@@ -28,4 +28,4 @@ def calculate_throughput(
     elapsed_time = end_time - start_time
     if elapsed_time <= 0:
         return 0.0
-    return (messages * size * 8) / (elapsed_time * 1024 * 1024)  # Mbps
+    return (messages * size * 8) / (elapsed_time * 1_000_000)  # Mbps
