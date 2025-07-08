@@ -183,7 +183,10 @@ def save_results(results: list[dict[str, Any]], file: pathlib.Path):
         return
     file.parent.mkdir(parents=True, exist_ok=True)
     df = pd.DataFrame(results)
-    df.to_csv(file, index=False)
+    if file.exists():
+        df.to_csv(file, mode="a", header=False, index=False)
+    else:
+        df.to_csv(file, mode="w", header=True, index=False)
     logger.info(f"Results saved to {file}")
 
 
@@ -205,6 +208,17 @@ def coordinator(settings: "BenchmarkSettings", test_matrix: list[dict]):
     pub_socket.bind(f"tcp://*:{settings.network.coordinator_pub_port}")
 
     registry = WorkerRegistry()
+
+    # Prepare output files
+    results_file = settings.output.results_file
+    config_file = settings.output.config_file
+    if settings.output.add_date_time:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        results_file = results_file.with_name(f"{timestamp}_{results_file.name}")
+        config_file = config_file.with_name(f"{timestamp}_{config_file.name}")
+
+    # Save settings once
+    save_settings(settings, file=config_file)
 
     logger.info(f"Waiting for {settings.num_pairs * 2} workers to register and pair...")
 
@@ -231,7 +245,6 @@ def coordinator(settings: "BenchmarkSettings", test_matrix: list[dict]):
     logger.info("All workers have been paired.")
 
     logger.info("Starting test execution loop.")
-    all_results: list[TestResult] = []
     test_results: list[TestResult] = []
 
     for i, test_config_dict in enumerate(test_matrix):
@@ -281,20 +294,11 @@ def coordinator(settings: "BenchmarkSettings", test_matrix: list[dict]):
         )
         logger.info("All workers have finished the test.")
 
-        all_results.extend(test_results)
-        logger.info(f"Test complete. Collected {len(test_results)} results.")
+        save_results([r.model_dump() for r in test_results], file=results_file)
+        logger.info(f"Test complete. Collected and saved {len(test_results)} results.")
 
     # Signal end of tests
     logger.info("All tests complete. Shutting down workers.")
     pub_socket.send_multipart([CoordinationSignal.FINISH.value.encode(), b""])
 
-    results_file = settings.output.results_file
-    config_file = settings.output.config_file
-    if settings.output.add_date_time:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        results_file = results_file.with_name(f"{timestamp}_{results_file.name}")
-        config_file = config_file.with_name(f"{timestamp}_{config_file.name}")
-
-    save_results([r.model_dump() for r in all_results], file=results_file)
-    save_settings(settings, file=config_file)
     ctx.destroy()
