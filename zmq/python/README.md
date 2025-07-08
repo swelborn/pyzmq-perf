@@ -75,11 +75,7 @@ pyzmq-bench receiver --num-pairs 2
 After a benchmark run is complete, a `test_results.csv` file will be generated. You can use the `pyzmq-plot` command to visualize the results:
 
 ```bash
-pyzmq-plot test_results.csv
+pyzmq-bench plot test_results.csv
 ```
 
 This will generate a plot showing throughput vs. message size, which can be saved to a file.
-
-## Acknowledgments
-
-This project was created to facilitate high-performance messaging benchmarks.
