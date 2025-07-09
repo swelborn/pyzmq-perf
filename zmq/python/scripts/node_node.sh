@@ -15,7 +15,7 @@ BASE_RESULTS_DIR="$HOME/pyzmq-bench-output/numa_$today_datetime"
 mkdir -p "$BASE_RESULTS_DIR"
 
 # Save a copy of this script for reproducibility
-cp "$CURRENT_DIR/node_node.sh" "$BASE_RESULTS_DIR/"
+cp "$0" "$BASE_RESULTS_DIR/node_node.sh"
 
 # Get the hostnames of the allocated nodes
 nodes=$(scontrol show hostnames "$SLURM_NODELIST")
@@ -30,7 +30,34 @@ echo "Sender node: $sender_node"
 coordinator_node_hostname=${coordinator_node}.chn.perlmutter.nersc.gov
 echo "Coordinator node hostname: $coordinator_node_hostname"
 
-send_recv_pairs=4
+num_groups=4
+num_receivers_per_sender=1
+
+# Create initial YAML configuration file for plotting
+echo "Creating initial YAML configuration file for comparison plot..."
+YAML_CONFIG="$BASE_RESULTS_DIR/numa_comparison_config.yaml"
+cat > "$YAML_CONFIG" << EOF
+title: "$num_groups groups, $num_receivers_per_sender receivers/sender"
+output_path: "$BASE_RESULTS_DIR/numa_throughput_comparison.png"
+show: false
+figsize: [16, 10]
+datasets:
+EOF
+
+echo "Initial YAML configuration created at: $YAML_CONFIG"
+
+# Function to add dataset to YAML config
+add_dataset_to_yaml() {
+    local csv_file=$1
+    local label=$2
+    local description=$3
+    
+    cat >> "$YAML_CONFIG" << EOF
+  - csv_file: "$csv_file"
+    label: "$label"
+    description: "$description"
+EOF
+}
 
 # Function to run a single NUMA benchmark
 run_numa_benchmark() {
@@ -47,7 +74,8 @@ run_numa_benchmark() {
     
     # Create .env file for this benchmark
     echo "PYZMQ_BENCH_SHORT_TEST=false" > ".env"
-    echo "PYZMQ_BENCH_NUM_PAIRS=$send_recv_pairs" >> ".env"
+    echo "PYZMQ_BENCH_NUM_PAIRS=$num_groups" >> ".env"
+    echo "PYZMQ_BENCH_RECEIVERS_PER_SENDER=$num_receivers_per_sender" >> ".env"
     echo "PYZMQ_BENCH_NETWORK__COORDINATOR_IP=$coordinator_node_hostname" >> ".env"
     echo "PYZMQ_BENCH_NETWORK__COORDINATOR_ROUTER_PORT=5599" >> ".env"
     echo "PYZMQ_BENCH_NETWORK__COORDINATOR_PUB_PORT=5600" >> ".env"
@@ -94,6 +122,10 @@ run_numa_benchmark() {
     if [ -f "$RESULTS_DIR/out/results.csv" ]; then
         echo "Creating plot for $benchmark_name..."
         pyzmq-bench plot "$RESULTS_DIR/out/results.csv"
+        return 0  # Success
+    else
+        echo "Error: results.csv not found for $benchmark_name"
+        return 1  # Failure
     fi
     
     # Small delay between benchmarks
@@ -104,68 +136,47 @@ run_numa_benchmark() {
 # Format: run_numa_benchmark <coordinator_numa> <sender_numa> <benchmark_name>
 
 # Benchmark 1: No NUMA binding (baseline)
-run_numa_benchmark "none" "none" "baseline_no_numa"
+if run_numa_benchmark "none" "none" "baseline_no_numa"; then
+    add_dataset_to_yaml "$BASE_RESULTS_DIR/baseline_no_numa/out/results.csv" "No NUMA" "Baseline with no NUMA binding"
+fi
 
 # Benchmark 2: Both on NUMA node 1 (12 distance)
-run_numa_benchmark "1" "1" "both_numa_1"
+if run_numa_benchmark "1" "1" "both_numa_1"; then
+    add_dataset_to_yaml "$BASE_RESULTS_DIR/both_numa_1/out/results.csv" "Both NUMA 12" "Both coordinator and sender on NUMA node 1 (12 distance)"
+fi
 
 # Benchmark 3: Both on NUMA node 2 (NIC NUMA)
-run_numa_benchmark "2" "2" "both_numa_2_nic"
+if run_numa_benchmark "2" "2" "both_numa_2_nic"; then
+    add_dataset_to_yaml "$BASE_RESULTS_DIR/both_numa_2_nic/out/results.csv" "Both NUMA 10" "Both coordinator and sender on NUMA node 2 (NIC NUMA, 10 distance)"
+fi
 
 # Benchmark 4: Both on NUMA node 7 (32 distance)
-run_numa_benchmark "7" "7" "both_numa_7"
+if run_numa_benchmark "7" "7" "both_numa_7"; then
+    add_dataset_to_yaml "$BASE_RESULTS_DIR/both_numa_7/out/results.csv" "Both NUMA 32" "Both coordinator and sender on NUMA node 7 (32 distance)"
+fi
 
 # Benchmark 5: Coordinator on NIC NUMA, Sender on 12 distance
-run_numa_benchmark "2" "1" "coord_nic_sender_12"
+if run_numa_benchmark "2" "1" "coord_nic_sender_12"; then
+    add_dataset_to_yaml "$BASE_RESULTS_DIR/coord_nic_sender_12/out/results.csv" "Recv NUMA 10, Send NUMA 12" "Coordinator on NUMA 2 (NIC), Sender on NUMA 1 (12 distance)"
+fi
 
 # Benchmark 6: Coordinator on 12 distance, Sender on NIC NUMA
-run_numa_benchmark "1" "2" "coord_12_sender_nic"
+if run_numa_benchmark "1" "2" "coord_12_sender_nic"; then
+    add_dataset_to_yaml "$BASE_RESULTS_DIR/coord_12_sender_nic/out/results.csv" "Recv NUMA 12, Send NUMA 10" "Coordinator on NUMA 1 (12 distance), Sender on NUMA 2 (NIC)"
+fi
 
 # Benchmark 7: Coordinator on NIC NUMA, Sender on 32 distance
-run_numa_benchmark "2" "7" "coord_nic_sender_32"
+if run_numa_benchmark "2" "7" "coord_nic_sender_32"; then
+    add_dataset_to_yaml "$BASE_RESULTS_DIR/coord_nic_sender_32/out/results.csv" "Recv NUMA 10, Send NUMA 32" "Coordinator on NUMA 2 (NIC), Sender on NUMA 7 (32 distance)"
+fi
 
 # Benchmark 8: Coordinator on 32 distance, Sender on NIC NUMA
-run_numa_benchmark "7" "2" "coord_32_sender_nic"
-
-# Generate YAML configuration file for plotting
-echo "Generating YAML configuration file for comparison plot..."
-YAML_CONFIG="$BASE_RESULTS_DIR/numa_comparison_config.yaml"
-cat > "$YAML_CONFIG" << EOF
-title: "Throughput Comparison: NUMA CPU Nodes ($send_recv_pairs send/recv pairs)"
-datasets:
-  - csv_file: "$BASE_RESULTS_DIR/baseline_no_numa/out/results.csv"
-    label: "No NUMA"
-    description: "Baseline with no NUMA binding"
-  - csv_file: "$BASE_RESULTS_DIR/both_numa_1/out/results.csv"
-    label: "Both NUMA 12"
-    description: "Both coordinator and sender on NUMA node 1 (12 distance)"
-  - csv_file: "$BASE_RESULTS_DIR/both_numa_2_nic/out/results.csv"
-    label: "Both NUMA 10"
-    description: "Both coordinator and sender on NUMA node 2 (NIC NUMA, 10 distance)"
-  - csv_file: "$BASE_RESULTS_DIR/both_numa_7/out/results.csv"
-    label: "Both NUMA 32"
-    description: "Both coordinator and sender on NUMA node 7 (32 distance)"
-  - csv_file: "$BASE_RESULTS_DIR/coord_12_sender_nic/out/results.csv"
-    label: "Recv NUMA 12, Send NUMA 10"
-    description: "Coordinator on NUMA 1 (12 distance), Sender on NUMA 2 (NIC)"
-  - csv_file: "$BASE_RESULTS_DIR/coord_32_sender_nic/out/results.csv"
-    label: "Recv NUMA 32, Send NUMA 10"
-    description: "Coordinator on NUMA 7 (32 distance), Sender on NUMA 2 (NIC)"
-  - csv_file: "$BASE_RESULTS_DIR/coord_nic_sender_12/out/results.csv"
-    label: "Recv NUMA 10, Send NUMA 12"
-    description: "Coordinator on NUMA 2 (NIC), Sender on NUMA 1 (12 distance)"
-  - csv_file: "$BASE_RESULTS_DIR/coord_nic_sender_32/out/results.csv"
-    label: "Recv NUMA 10, Send NUMA 32"
-    description: "Coordinator on NUMA 2 (NIC), Sender on NUMA 7 (32 distance)"
-output_path: "$BASE_RESULTS_DIR/numa_throughput_comparison.png"
-show: false
-figsize: [16, 10]
-EOF
-
-echo "YAML configuration saved to: $YAML_CONFIG"
+if run_numa_benchmark "7" "2" "coord_32_sender_nic"; then
+    add_dataset_to_yaml "$BASE_RESULTS_DIR/coord_32_sender_nic/out/results.csv" "Recv NUMA 32, Send NUMA 10" "Coordinator on NUMA 7 (32 distance), Sender on NUMA 2 (NIC)"
+fi
 
 # Generate the comparison plot
-echo "Generating comparison plot..."
+echo "Generating final comparison plot..."
 cd "$CURRENT_DIR"
 pyzmq-bench plot "$YAML_CONFIG"
 

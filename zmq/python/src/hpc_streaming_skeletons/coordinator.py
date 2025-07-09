@@ -11,8 +11,8 @@ from rich.logging import RichHandler
 import zmq
 from hpc_streaming_skeletons.models import (
     CoordinationSignal,
+    GroupSetupInfo,
     Role,
-    SetupInfo,
     TestResult,
     Worker,
     WorkerCreate,
@@ -47,6 +47,11 @@ logger = get_coordinator_logger()
 
 
 class WorkerRegistry(dict[bytes, Worker]):
+    def __init__(self):
+        super().__init__()
+        self._next_group_id = 0
+        self._next_port_offset = 0
+
     def register(self, worker: Worker):
         self[worker.id] = worker
 
@@ -60,22 +65,49 @@ class WorkerRegistry(dict[bytes, Worker]):
             return False
         return all(worker.test_number == test_number for worker in self.values())
 
-    def pair(self, id1: bytes, id2: bytes):
-        worker1 = self.get(id1)
-        worker2 = self.get(id2)
-        if not worker1:
-            raise ValueError(f"Worker with id {id1} not found.")
-        if not worker2:
-            raise ValueError(f"Worker with id {id2} not found.")
-        worker1.pair_id = id2
-        worker2.pair_id = id1
+    def create_group(self, sender_id: bytes, receiver_ids: list[bytes]) -> int:
+        """Create a group for any number of receivers per sender"""
+        group_id = self._next_group_id
+        self._next_group_id += 1
+
+        # Assign group ID to sender
+        sender = self.get(sender_id)
+        if not sender:
+            raise ValueError(f"Sender with id {sender_id} not found.")
+        sender.group_id = group_id
+
+        # Assign group ID to all receivers
+        for receiver_id in receiver_ids:
+            receiver = self.get(receiver_id)
+            if not receiver:
+                raise ValueError(f"Receiver with id {receiver_id} not found.")
+            receiver.group_id = group_id
+
+        return group_id
+
+    def allocate_ports(
+        self, num_receivers: int, sender_bind: bool
+    ) -> tuple[int, list[int]]:
+        """Allocate ports for a group based on sender_bind setting"""
+        if sender_bind:
+            # Sender binds to one port, all receivers connect to it
+            data_port = self._next_port_offset
+            receiver_ports = [data_port] * num_receivers
+            self._next_port_offset += 1
+        else:
+            # Each receiver binds to its own port, sender connects to all
+            data_port = self._next_port_offset
+            receiver_ports = [self._next_port_offset + i for i in range(num_receivers)]
+            self._next_port_offset += num_receivers
+
+        return data_port, receiver_ports
 
     @property
     def unpaired_senders(self) -> list[Worker]:
         return [
             worker
             for worker in self.values()
-            if worker.role == Role.sender and not worker.pair_id
+            if worker.role == Role.sender and worker.group_id is None
         ]
 
     @property
@@ -83,21 +115,28 @@ class WorkerRegistry(dict[bytes, Worker]):
         return [
             worker
             for worker in self.values()
-            if worker.role == Role.receiver and not worker.pair_id
+            if worker.role == Role.receiver and worker.group_id is None
         ]
 
     @property
-    def paired_workers(self) -> list[Worker]:
-        return [worker for worker in self.values() if worker.pair_id is not None]
+    def grouped_workers(self) -> list[Worker]:
+        return [worker for worker in self.values() if worker.group_id is not None]
 
-    def able_to_pair(self) -> bool:
+    def able_to_group(self, receivers_per_sender: int) -> bool:
         unpaired_senders = self.unpaired_senders
         unpaired_receivers = self.unpaired_receivers
-        return bool(unpaired_senders and unpaired_receivers)
+        return (
+            len(unpaired_senders) > 0
+            and len(unpaired_receivers) >= receivers_per_sender
+        )
 
     @property
-    def num_pairs(self) -> int:
-        return len(self.paired_workers) // 2
+    def num_groups(self) -> int:
+        group_ids = set()
+        for worker in self.values():
+            if worker.group_id is not None:
+                group_ids.add(worker.group_id)
+        return len(group_ids)
 
     @property
     def num_workers(self) -> int:
@@ -137,25 +176,56 @@ def register_worker(
     logger.info(f"Registering worker {_worker.worker_id} as {str(_worker.role)}")
     registry[id] = _worker
 
-    if not registry.able_to_pair():
+    # Always use group mode (pair mode is just group mode with 1 receiver)
+    if not registry.able_to_group(settings.receivers_per_sender):
         return
 
-    data_port = settings.network.data_port_start + registry.num_pairs
+    # Get one sender and required number of receivers
     sender = registry.unpaired_senders[0]
-    receiver = registry.unpaired_receivers[0]
+    receivers = registry.unpaired_receivers[: settings.receivers_per_sender]
 
-    logger.debug(
-        f"Pairing {sender.worker_id} with {receiver.worker_id} on port {data_port}"
+    if len(receivers) < settings.receivers_per_sender:
+        return  # Not enough receivers yet
+
+    # Create group
+    receiver_ids = [r.id for r in receivers]
+    group_id = registry.create_group(sender.id, receiver_ids)
+
+    # Allocate ports based on sender_bind setting
+    port_offset, receiver_ports = registry.allocate_ports(
+        len(receivers), settings.worker.sender_bind
     )
-    registry.pair(sender.id, receiver.id)
+    data_port = settings.network.data_port_start + port_offset
+    actual_receiver_ports = [
+        settings.network.data_port_start + port for port in receiver_ports
+    ]
 
-    # Tell workers about their peer and connection info
-    setup_info = SetupInfo(data_port=data_port)
-    setup_info_msg = setup_info.model_dump_json().encode()
+    if settings.worker.sender_bind:
+        logger.debug(
+            f"Creating group {group_id}: sender {sender.worker_id} binds to port {data_port}, "
+            f"{len(receivers)} receivers connect to it"
+        )
+    else:
+        logger.debug(
+            f"Creating group {group_id}: sender {sender.worker_id} connects to {len(receivers)} receivers "
+            f"on ports {actual_receiver_ports}"
+        )
 
-    # Send setup to both workers in the pair
-    router_socket.send_multipart([sender.id, b"", setup_info_msg])
-    router_socket.send_multipart([receiver.id, b"", setup_info_msg])
+    # Send setup to sender
+    msg = GroupSetupInfo(
+        data_port=data_port,
+        receiver_ports=actual_receiver_ports,
+        group_id=group_id,
+        index=0,
+    )
+    _msg = msg.model_dump_json().encode()
+    router_socket.send_multipart([sender.id, b"", _msg])
+
+    # Send setup to all receivers
+    for index, receiver in enumerate(receivers):
+        msg.index = index
+        _msg = msg.model_dump_json().encode()
+        router_socket.send_multipart([receiver.id, b"", _msg])
 
 
 def wait_for_workers_state(
@@ -164,7 +234,6 @@ def wait_for_workers_state(
     registry: WorkerRegistry,
     poller: zmq.Poller,
     router_socket: zmq.Socket,
-    settings: "BenchmarkSettings",
     test_results: list[TestResult] | None = None,
 ):
     while not (
@@ -220,14 +289,26 @@ def coordinator(settings: "BenchmarkSettings", test_matrix: list[dict]):
     # Save settings once
     save_settings(settings, file=config_file)
 
-    logger.info(f"Waiting for {settings.num_pairs * 2} workers to register and pair...")
+    # Calculate expected worker counts
+    expected_workers = settings.num_pairs * (1 + settings.receivers_per_sender)
+    expected_groups = settings.num_pairs
+
+    logger.info(
+        f"Waiting for {expected_workers} workers to register and form {expected_groups} groups..."
+    )
 
     poller = zmq.Poller()
     poller.register(router_socket, zmq.POLLIN)
 
-    while registry.num_pairs < settings.num_pairs or not registry.check_all_state(
-        WorkerState.CONNECTED_TO_SYNC
-    ):
+    # Wait for all workers to register and form groups
+    while True:
+        ready = registry.num_groups >= settings.num_pairs and registry.check_all_state(
+            WorkerState.CONNECTED_TO_SYNC
+        )
+
+        if ready:
+            break
+
         if not req_poll(poller, router_socket):
             continue
 
@@ -237,12 +318,12 @@ def coordinator(settings: "BenchmarkSettings", test_matrix: list[dict]):
         if id not in registry:
             register_worker(id, msg_bytes, registry, router_socket, settings)
             logger.info(
-                f"Registered {registry.num_workers} workers, {registry.num_pairs} pairs."
+                f"Registered {registry.num_workers} workers, {registry.num_groups} groups."
             )
         else:
             update_worker(id, msg_bytes, registry, router_socket)
 
-    logger.info("All workers have been paired.")
+    logger.info("All workers have been grouped.")
 
     logger.info("Starting test execution loop.")
     test_results: list[TestResult] = []
@@ -266,7 +347,6 @@ def coordinator(settings: "BenchmarkSettings", test_matrix: list[dict]):
             registry=registry,
             poller=poller,
             router_socket=router_socket,
-            settings=settings,
         )
         logger.info("All workers have received the config.")
 
@@ -276,7 +356,6 @@ def coordinator(settings: "BenchmarkSettings", test_matrix: list[dict]):
             registry=registry,
             poller=poller,
             router_socket=router_socket,
-            settings=settings,
         )
         logger.info("All workers are ready for the test.")
 
@@ -289,7 +368,6 @@ def coordinator(settings: "BenchmarkSettings", test_matrix: list[dict]):
             registry=registry,
             poller=poller,
             router_socket=router_socket,
-            settings=settings,
             test_results=test_results,
         )
         logger.info("All workers have finished the test.")

@@ -10,8 +10,8 @@ from rich.logging import RichHandler
 import zmq
 from hpc_streaming_skeletons.models import (
     CoordinationSignal,
+    GroupSetupInfo,
     Role,
-    SetupInfo,
     TestConfig,
     TestResult,
     WorkerCreate,
@@ -49,6 +49,22 @@ def send_update(socket: zmq.Socket, worker_id: str, update: WorkerUpdate):
         raise RuntimeError(
             f"[{worker_id}] did not receive ACK from coordinator after update."
         )
+    logger.debug("Received ACK from coordinator after update.")
+
+
+def retry_bind(socket: zmq.Socket, address: str, max_attempts: int = 10) -> None:
+    """Keep trying to bind the socket to the address until successful or max attempts reached."""
+    attempts = 0
+    while attempts < max_attempts:
+        try:
+            socket.bind(address)
+            logger.debug(f"Successfully bound to {address}.")
+            return
+        except zmq.ZMQError:
+            logger.warning(f"Failed to bind to {address}. Retrying...")
+            attempts += 1
+            time.sleep(0.2)
+    raise RuntimeError(f"Failed to bind to {address} after {max_attempts} attempts.")
 
 
 def worker(
@@ -70,10 +86,13 @@ def worker(
     # Get peer info and sync address
     setup_info_raw = req_socket.recv()
 
-    setup_info = SetupInfo.model_validate_json(setup_info_raw)
-    data_port = setup_info.data_port
+    # Parse group setup info (always used now)
+    group_setup_info = GroupSetupInfo.model_validate_json(setup_info_raw)
+    logger.debug(
+        f"Received group setup info: \n{group_setup_info.model_dump_json(indent=2)}"
+    )
+
     sync_address = f"tcp://{settings.network.coordinator_ip}:{settings.network.coordinator_pub_port}"
-    logger.debug(f"Received setup info: \n{setup_info.model_dump_json(indent=2)}")
 
     # Subscribe to sync signals
     sub_socket = ctx.socket(zmq.SUB)
@@ -86,6 +105,7 @@ def worker(
     update = WorkerUpdate(state=WorkerState.CONNECTED_TO_SYNC)
     send_update(req_socket, worker_id, update)
     logger.debug(f"updated state to {update.state}.")
+    data_socket = None
 
     while True:
         # Wait for test config
@@ -100,31 +120,42 @@ def worker(
         )
         send_update(req_socket, worker_id, update)
 
-        # Setup data socket
+        if isinstance(data_socket, zmq.Socket):
+            data_socket.close()
+            logger.debug("Closed previous data socket.")
+
         if role == Role.sender:
             data_socket = ctx.socket(zmq.PUB if config.pub else zmq.PUSH)
             data_socket.setsockopt(zmq.SNDHWM, config.sndhwm)
             if settings.worker.sender_bind:
-                addr = f"tcp://*:{data_port}"
-                data_socket.bind(addr)
-                logger.debug(f"Bound to {addr}.")
+                # Sender binds to one port, all receivers connect to it
+                addr = f"tcp://*:{group_setup_info.data_port}"
+                retry_bind(data_socket, addr)
             else:
-                addr = f"tcp://{settings.network.coordinator_ip}:{data_port}"
-                data_socket.connect(addr)
-                logger.debug(f"Connected to {addr}.")
+                # Sender connects to all receiver ports
+                for i, receiver_port in enumerate(group_setup_info.receiver_ports):
+                    addr = f"tcp://{settings.network.coordinator_ip}:{receiver_port}"
+                    data_socket.connect(addr)
+                    logger.debug(f"Connected to receiver {i} at {addr}.")
         else:
             data_socket = ctx.socket(zmq.SUB if config.pub else zmq.PULL)
             if config.pub:
                 data_socket.setsockopt_string(zmq.SUBSCRIBE, "")
             data_socket.setsockopt(zmq.RCVHWM, config.rcvhwm)
-            if not settings.worker.sender_bind:
-                addr = f"tcp://*:{data_port}"
-                data_socket.bind(addr)
-                logger.debug(f"Bound to {addr}.")
-            else:
-                addr = f"tcp://{settings.network.coordinator_ip}:{data_port}"
+            if settings.worker.sender_bind:
+                # Receivers connect to sender's port
+                addr = f"tcp://{settings.network.coordinator_ip}:{group_setup_info.data_port}"
                 data_socket.connect(addr)
-                logger.debug(f"Connected to {addr}.")
+                logger.debug(f"Connected to sender at {addr}.")
+            else:
+                # Each receiver binds to its own port
+                # Find this receiver's index in the group
+                try:
+                    my_port = group_setup_info.receiver_ports[group_setup_info.index]
+                    addr = f"tcp://*:{my_port}"
+                    retry_bind(data_socket, addr)
+                except ValueError:
+                    raise ValueError(f"{worker_id} not found in group setup")
         time.sleep(settings.worker.setup_delay_s)
 
         # Signal ready
@@ -136,10 +167,13 @@ def worker(
         # Wait for start signal
         if not sub_socket.recv_string() == CoordinationSignal.START.value:
             raise RuntimeError(f"Worker {worker_id} did not receive START signal.")
+
         logger.info(f"Starting test {config.test_number}.")
 
         # Run test
-        result_data = run_test(role, config, data_socket)
+        result_data = run_test(
+            role, config, data_socket, sub_socket, len(group_setup_info.receiver_ports)
+        )
         result = TestResult(
             worker_id=worker_id,
             role=role,
@@ -161,20 +195,48 @@ def worker(
     ctx.destroy()
 
 
-def run_test(role: Role, config: TestConfig, data_socket: zmq.Socket):
+def run_test(
+    role: Role,
+    config: TestConfig,
+    data_socket: zmq.Socket,
+    sub_socket: zmq.Socket,
+    num_receivers: int = 1,
+):
     data = b" " * config.size
     copy = not config.zero_copy
 
     def send():
         start_time = 0.0
-        first_message_sent = False
+        logger.debug(
+            f"Starting to send {config.count} messages of size {config.size} bytes."
+        )
+
+        start_time = time.time()
+
         for _ in range(config.count):
             data_socket.send(data, copy=copy)
-            if not first_message_sent:
-                first_message_sent = True
-                start_time = time.time()
+
         end_time = time.time()
-        messages_sent = config.count - 1
+
+        # Send END messages to signal completion (only needed when num_receivers > 1)
+        logger.debug(f"Sending END messages for {num_receivers} receivers.")
+        if config.pub:
+            # In Pub/Sub mode, send a single END message
+            data_socket.send(b"END", copy=copy)
+        else:
+            # In Push/Pull mode, send 10 * num_receivers END messages
+            for _ in range(10 * num_receivers):
+                try:
+                    data_socket.send(b"END", copy=copy, flags=zmq.NOBLOCK)
+                except zmq.Again as e:
+                    if "temporarily unavailable" in str(e):
+                        logger.debug(
+                            "No more receivers available to send END message, exiting."
+                        )
+                        # this mean that receivers are all finished
+                        break
+
+        messages_sent = config.count
         throughput = calculate_throughput(
             messages_sent, config.size, start_time, end_time
         )
@@ -187,15 +249,24 @@ def run_test(role: Role, config: TestConfig, data_socket: zmq.Socket):
 
     def receive():
         start_time = 0.0
-        # start at -1 to account for the first message not being counted
-        messages_received = -1
+        messages_received = 0
         first_message_received = False
-        for _ in range(config.count):
-            data_socket.recv(copy=copy)
+
+        # Use END message protocol for many-to-one scenarios
+        while True:
+            msg = data_socket.recv(copy=copy)
+            msg = msg.buffer if isinstance(msg, zmq.Frame) else msg
+            if msg == b"END":
+                logger.debug("Received END message, stopping reception.")
+                break
             if not first_message_received:
                 first_message_received = True
+                # This is not "entirely" correct, but we count it as a rounding error
+                # ... we tried signaling with a "START" message as well, but it is not
+                # reliable because all the receivers may not get this START
                 start_time = time.time()
             messages_received += 1
+
         end_time = time.time()
         throughput = calculate_throughput(
             messages_received, config.size, start_time, end_time
