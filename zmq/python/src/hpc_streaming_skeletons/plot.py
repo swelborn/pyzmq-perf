@@ -23,8 +23,7 @@ class DatasetConfig(BaseModel):
 class PlotConfig(BaseModel):
     title: str
     datasets: List[DatasetConfig]
-    output_path: Optional[Path]
-    show: bool = True
+    output_path: Path
     figsize: tuple[float, float] = (10, 6)
 
 
@@ -37,11 +36,6 @@ def plot(
         "--output",
         "-o",
         help="Output file path for the plot (overrides config file setting)",
-    ),
-    show: Optional[bool] = typer.Option(
-        None,
-        "--show/--no-show",
-        help="Whether to show the plot (overrides config file setting)",
     ),
 ) -> None:
     """
@@ -95,8 +89,6 @@ def plot(
         # Override config with command line arguments if provided
         if output_path is not None:
             config.output_path = output_path
-        if show is not None:
-            config.show = show
 
     typer.echo(f"Processing {len(config.datasets)} datasets:")
     for i, dataset in enumerate(config.datasets, 1):
@@ -337,8 +329,4 @@ def plot(
     # Always save the plot (output_path is guaranteed to be set)
     fig.savefig(config.output_path, dpi=300, bbox_inches="tight")
     typer.echo(f"✅ Plot saved to {config.output_path}")
-
-    if config.show:
-        plt.show()
-    else:
-        plt.close(fig)
+    plt.close(fig)
