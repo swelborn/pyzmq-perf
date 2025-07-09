@@ -26,7 +26,7 @@ NumPairsT = Annotated[
 ]
 ReceiversPerSenderT = Annotated[
     Optional[int],
-    typer.Option(help="Number of receivers per sender (1 = pair mode, >1 = many-to-one mode)"),
+    typer.Option(help="Number of receivers per sender."),
 ]
 SenderBindT = Annotated[
     Optional[bool],
@@ -159,45 +159,21 @@ def run(
         processes.append(coordinator_process)
 
     # Calculate total number of workers needed
-    if settings.receivers_per_sender == 1:
-        # Traditional pair mode
+    if role == Role.sender:
         total_workers = settings.num_pairs
-        console.print(
-            f"👥 Starting [bold cyan]{total_workers}[/bold cyan] [bold cyan]{role.value}[/bold cyan] worker(s)..."
+    else:  # Role.receiver
+        total_workers = settings.num_pairs * settings.receivers_per_sender
+
+    console.print(
+        f"👥 Starting [bold cyan]{total_workers}[/bold cyan] [bold cyan]{role.value}[/bold cyan] worker(s)..."
+    )
+    for i in range(total_workers):
+        worker_id = f"{role.value}-{i}"
+        p = multiprocessing.Process(
+            target=worker,
+            args=(role, worker_id, settings),
         )
-        for i in range(total_workers):
-            worker_id = f"{role.value}-{i}"
-            p = multiprocessing.Process(
-                target=worker,
-                args=(role, worker_id, settings),
-            )
-            processes.append(p)
-    else:
-        # Many-to-one mode
-        if role == Role.sender:
-            total_workers = settings.num_pairs
-            console.print(
-                f"👥 Starting [bold cyan]{total_workers}[/bold cyan] [bold cyan]{role.value}[/bold cyan] worker(s)..."
-            )
-            for i in range(total_workers):
-                worker_id = f"{role.value}-{i}"
-                p = multiprocessing.Process(
-                    target=worker,
-                    args=(role, worker_id, settings),
-                )
-                processes.append(p)
-        else:  # Role.receiver
-            total_workers = settings.num_pairs * settings.receivers_per_sender
-            console.print(
-                f"👥 Starting [bold cyan]{total_workers}[/bold cyan] [bold cyan]{role.value}[/bold cyan] worker(s)..."
-            )
-            for i in range(total_workers):
-                worker_id = f"{role.value}-{i}"
-                p = multiprocessing.Process(
-                    target=worker,
-                    args=(role, worker_id, settings),
-                )
-                processes.append(p)
+        processes.append(p)
 
     # Start all processes
     for p in processes:
