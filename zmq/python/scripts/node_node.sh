@@ -9,9 +9,9 @@
 #SBATCH --output=%j.out
 
 CURRENT_DIR=$(pwd)
-today_datetime=$(date +%Y-%m-%d_%H-%M-%S)
+today_datetime=$(date +%Y-%m-%d)
 echo "NUMA benchmark started at: $today_datetime"
-BASE_RESULTS_DIR="$HOME/pyzmq-bench-output/numa_$today_datetime"
+BASE_RESULTS_DIR="$HOME/pyzmq-bench-output/numa_${today_datetime}_${SLURM_JOB_ID}"
 mkdir -p "$BASE_RESULTS_DIR"
 
 # Save a copy of this script for reproducibility
