@@ -229,6 +229,7 @@ class BenchmarkSettings(BaseSettings):
             pubs = [False]
             sndhwms = [100]
             rcvhwms = [100]
+            recv_callbacks = [ReceiveCallback.NONE]
         else:
             counts = self.test_matrix.message_counts
             sizes = self.test_matrix.get_filtered_message_sizes()
