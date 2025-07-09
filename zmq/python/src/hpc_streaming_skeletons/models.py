@@ -19,6 +19,11 @@ class CoordinationSignal(str, Enum):
     FINISH = "FINISH"
 
 
+class ReceiveCallback(str, Enum):
+    NONE = "none"
+    WRITE_NPY = "write_npy"
+
+
 class TestConfigCreate(BaseModel):
     count: int  # number of messages to send
     size: int  # size of messages
@@ -26,6 +31,7 @@ class TestConfigCreate(BaseModel):
     pub: bool  # true, use pub/sub. false, use push/pull
     rcvhwm: int  # puller hwm
     sndhwm: int  # sender hwm
+    recv_callback: ReceiveCallback
 
 
 class TestConfig(TestConfigCreate):
