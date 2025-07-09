@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=iperf-bench
+#SBATCH --job-name=iperf-node-node
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
 #SBATCH --qos=debug
@@ -11,10 +11,14 @@
 
 CURRENT_DIR=$(pwd)
 today_datetime=$(date +%Y-%m-%d_%H-%M-%S)
-echo "Benchmark started at: $today_datetime"
-RESULTS_DIR="$CURRENT_DIR/out/$today_datetime"
+echo "Node-to-Node benchmark started at: $today_datetime"
+RESULTS_DIR="$CURRENT_DIR/out/node_node_$today_datetime"
 mkdir -p "$RESULTS_DIR"
 cd "$RESULTS_DIR"
+
+# Configuration for server and client execution methods
+SERVER_METHOD="srun"
+CLIENT_METHOD="srun"
 
 # Get the hostnames of the allocated nodes
 nodes=$(scontrol show hostnames "$SLURM_NODELIST")
@@ -22,56 +26,69 @@ nodes_array=($nodes)
 
 # Assign roles
 server_node=${nodes_array[0]}
-client_node=${nodes_array[1]}
-echo "Server node: $server_node"
-echo "Client node: $client_node"
-
 server_node_hostname=${server_node}.chn.perlmutter.nersc.gov
+client_node=${nodes_array[1]}
+
+echo "Server method: $SERVER_METHOD"
+echo "Server node: $server_node"
 echo "Server node hostname: $server_node_hostname"
+echo "Client method: $CLIENT_METHOD"
+echo "Client node: $client_node"
 
 # Destination IP address
 DEST_IP="$server_node_hostname"
 
-# Time for the test to run
-TIME="180"
-TIME_SERVER="200"
+# Source common functions
+source "$CURRENT_DIR/common.sh"
 
-# Enhanced reports
-ENHANCED_REPORTS="-e"
+# Node-to-Node specific benchmarks
+# Benchmark 1: Non-bound
+echo "=== Benchmark 1: Non-bound ==="
+start_server false 0 1
+start_client false 0 1
+wait_and_cleanup
 
-# Number of parallel client threads to run
-PARALLEL_THREADS="8"
+# Benchmark 2: Distance 12 on both
+echo "=== Benchmark 2: Distance 12 on both ==="
+start_server true 1 2
+start_client true 1 2
+wait_and_cleanup
 
-# Time between periodic bandwidth reports
-INTERVAL="30"
+# Benchmark 3: 32 distance numa on server, nic numa on client 
+echo "=== Benchmark 3: 32 distance numa on server, nic numa on client ==="
+start_server true 7 3
+start_client true 2 3
+wait_and_cleanup
 
-# TCP window size
-WINDOW_SIZE="512M"
+# Benchmark 4: 32 distance numa on client, nic numa on server
+echo "=== Benchmark 4: 32 distance numa on client, nic numa on server ==="
+start_server true 2 4
+start_client true 7 4
+wait_and_cleanup
 
-# Server port to connect to
-PORT="5558"
+# Benchmark 5: nic numa on both
+echo "=== Benchmark 5: nic numa on both ==="
+start_server true 2 5
+start_client true 2 5
+wait_and_cleanup
 
-# Path to the iperf binary
-IPERF_PATH="/global/cfs/cdirs/nstaff/iperf/iperf2/install_dir/bin/iperf"
+# Benchmark 6: 12 distance on server, nic numa on client
+echo "=== Benchmark 6: 12 distance on server, nic numa on client ==="
+start_server true 1 6
+start_client true 2 6
+wait_and_cleanup
 
-# Launch the receiver and coordinator on the first node
-echo "Starting server on $server_node..."
-SERVER_OUTPUT_FILE="$RESULTS_DIR/server_out.txt"
-echo "Server will run the following command: $IPERF_PATH -s -i $INTERVAL -f g -w $WINDOW_SIZE -p $PORT -B $DEST_IP -t $TIME_SERVER > $SERVER_OUTPUT_FILE"
-srun --nodes=1 --ntasks=1 -w "$server_node" \
-    $IPERF_PATH -s -i $INTERVAL -f g -w $WINDOW_SIZE -p $PORT -B $DEST_IP -t $TIME_SERVER > $SERVER_OUTPUT_FILE &
+# Benchmark 7: nic numa on server, 12 distance on client
+echo "=== Benchmark 7: nic numa on server, 12 distance on client ==="
+start_server true 2 7
+start_client true 1 7
+wait_and_cleanup
 
-sleep 5  # Give the server time to start
+# Benchmark 8: nic numa on server, 12 distance on client
+echo "=== Benchmark 8: 32 distance on both ==="
+start_server true 7 8
+start_client true 7 8
+wait_and_cleanup
 
-# Launch the sender on the second node.
-echo "Starting client on $client_node..."
-echo "Client will run the following command: $IPERF_PATH -c $DEST_IP -t $TIME $ENHANCED_REPORTS -P $PARALLEL_THREADS -i $INTERVAL -w $WINDOW_SIZE -p $PORT > $CLIENT_OUTPUT_FILE"
-CLIENT_OUTPUT_FILE="$RESULTS_DIR/client_out.txt"
-srun --nodes=1 --ntasks=1 -w "$client_node" \
-    $IPERF_PATH -c $DEST_IP -t $TIME $ENHANCED_REPORTS -P $PARALLEL_THREADS -i $INTERVAL -w $WINDOW_SIZE -p $PORT > $CLIENT_OUTPUT_FILE &
-
-wait
-
-echo "Benchmark finished."
-
+echo "Node-to-Node benchmark finished."
 mv "$CURRENT_DIR/$SLURM_JOB_ID.out" "$RESULTS_DIR/"
