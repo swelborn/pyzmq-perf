@@ -6,6 +6,8 @@ from typing import List
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .models import ReceiveCallback, TestConfigCreate
+
 
 class LoggingSettings(BaseModel):
     level: str = Field(
@@ -80,6 +82,10 @@ class TestMatrixSettings(BaseModel):
     )
     recv_hwm_values: List[int] = Field(
         default=[100], description="High water mark values for receive sockets"
+    )
+    recv_callback_options: List[ReceiveCallback] = Field(
+        default=[ReceiveCallback.NONE],
+        description="Callback options for receiving messages",
     )
 
     @field_validator(
@@ -214,7 +220,7 @@ class BenchmarkSettings(BaseSettings):
             raise ValueError("Number of receivers per sender must be positive")
         return v
 
-    def get_test_matrix(self) -> List[dict]:
+    def get_test_matrix(self) -> List[TestConfigCreate]:
         if self.short_test:
             # Override for short test mode
             counts = [100001]
@@ -230,20 +236,26 @@ class BenchmarkSettings(BaseSettings):
             pubs = self.test_matrix.pub_sub_options
             sndhwms = self.test_matrix.send_hwm_values
             rcvhwms = self.test_matrix.recv_hwm_values
+            recv_callbacks = self.test_matrix.recv_callback_options
 
-        test_combinations = product(counts, sizes, zero_copies, pubs, sndhwms, rcvhwms)
+        test_combinations = product(
+            counts, sizes, zero_copies, pubs, sndhwms, rcvhwms, recv_callbacks
+        )
 
-        return [
-            {
-                "count": count,
-                "size": size,
-                "zero_copy": zero_copy,
-                "pub": pub,
-                "sndhwm": sndhwm,
-                "rcvhwm": rcvhwm,
-            }
-            for count, size, zero_copy, pub, sndhwm, rcvhwm in test_combinations
+        test_matrix = [
+            TestConfigCreate(
+                count=count,
+                size=size,
+                zero_copy=zero_copy,
+                pub=pub,
+                sndhwm=sndhwm,
+                rcvhwm=rcvhwm,
+                recv_callback=recv_callback,
+            )
+            for count, size, zero_copy, pub, sndhwm, rcvhwm, recv_callback in test_combinations
         ]
+
+        return test_matrix
 
     def configure_logging(self) -> None:
         logging.basicConfig(

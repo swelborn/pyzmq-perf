@@ -19,13 +19,16 @@ class CoordinationSignal(str, Enum):
     FINISH = "FINISH"
 
 
-class TestConfig(BaseModel):
+class TestConfigCreate(BaseModel):
     count: int  # number of messages to send
     size: int  # size of messages
     zero_copy: bool  # use pyzmq zero-copy
     pub: bool  # true, use pub/sub. false, use push/pull
     rcvhwm: int  # puller hwm
     sndhwm: int  # sender hwm
+
+
+class TestConfig(TestConfigCreate):
     test_number: int
 
 
