@@ -24,6 +24,10 @@ NumPairsT = Annotated[
     Optional[int],
     typer.Option(help="Number of sender/receiver pairs"),
 ]
+ReceiversPerSenderT = Annotated[
+    Optional[int],
+    typer.Option(help="Number of receivers per sender (1 = pair mode, >1 = many-to-one mode)"),
+]
 SenderBindT = Annotated[
     Optional[bool],
     typer.Option(help="Senders bind to ports, receivers connect"),
@@ -48,6 +52,7 @@ def run(
     role: Role,
     coordinator: bool = False,
     num_pairs: int | None = None,
+    receivers_per_sender: int | None = None,
     sender_bind: bool | None = None,
     coordinator_ip: str | None = None,
     short: bool | None = None,
@@ -62,8 +67,11 @@ def run(
 
     Examples:
 
-    Run coordinator with 2 pairs:
+    Run coordinator with 2 pairs (traditional mode):
         pyzmq-bench sender --coordinator --num-pairs 2
+
+    Run coordinator with 2 senders, 4 receivers per sender (many-to-one mode):
+        pyzmq-bench sender --coordinator --num-pairs 2 --receivers-per-sender 4
 
     Run worker connecting to remote coordinator:
         pyzmq-bench receiver --coordinator-ip 192.168.1.100
@@ -95,6 +103,8 @@ def run(
     overrides = {}
     if num_pairs is not None:
         overrides["num_pairs"] = num_pairs
+    if receivers_per_sender is not None:
+        overrides["receivers_per_sender"] = receivers_per_sender
     if short is not None:
         overrides["short_test"] = short
     if log_level is not None:
@@ -129,8 +139,12 @@ def run(
         f"🚀 Starting benchmark with [bold cyan]{len(test_matrix)}[/bold cyan] test configurations"
     )
     console.print(
-        f"📊 Using [bold cyan]{settings.num_pairs}[/bold cyan] sender/receiver pair(s)"
+        f"📊 Using [bold cyan]{settings.num_pairs}[/bold cyan] sender/receiver group(s)"
     )
+    if settings.receivers_per_sender > 1:
+        console.print(
+            f"🔗 Many-to-One mode: [bold cyan]{settings.receivers_per_sender}[/bold cyan] receivers per sender"
+        )
     console.print(
         f"🌐 Coordinator: [bold cyan]{settings.network.coordinator_ip}:{settings.network.coordinator_router_port}[/bold cyan]"
     )
@@ -144,16 +158,46 @@ def run(
         )
         processes.append(coordinator_process)
 
-    console.print(
-        f"👥 Starting [bold cyan]{settings.num_pairs}[/bold cyan] [bold cyan]{role.value}[/bold cyan] worker(s)..."
-    )
-    for i in range(settings.num_pairs):
-        worker_id = f"{role.value}-{i}"
-        p = multiprocessing.Process(
-            target=worker,
-            args=(role, worker_id, settings),
+    # Calculate total number of workers needed
+    if settings.receivers_per_sender == 1:
+        # Traditional pair mode
+        total_workers = settings.num_pairs
+        console.print(
+            f"👥 Starting [bold cyan]{total_workers}[/bold cyan] [bold cyan]{role.value}[/bold cyan] worker(s)..."
         )
-        processes.append(p)
+        for i in range(total_workers):
+            worker_id = f"{role.value}-{i}"
+            p = multiprocessing.Process(
+                target=worker,
+                args=(role, worker_id, settings),
+            )
+            processes.append(p)
+    else:
+        # Many-to-one mode
+        if role == Role.sender:
+            total_workers = settings.num_pairs
+            console.print(
+                f"👥 Starting [bold cyan]{total_workers}[/bold cyan] [bold cyan]{role.value}[/bold cyan] worker(s)..."
+            )
+            for i in range(total_workers):
+                worker_id = f"{role.value}-{i}"
+                p = multiprocessing.Process(
+                    target=worker,
+                    args=(role, worker_id, settings),
+                )
+                processes.append(p)
+        else:  # Role.receiver
+            total_workers = settings.num_pairs * settings.receivers_per_sender
+            console.print(
+                f"👥 Starting [bold cyan]{total_workers}[/bold cyan] [bold cyan]{role.value}[/bold cyan] worker(s)..."
+            )
+            for i in range(total_workers):
+                worker_id = f"{role.value}-{i}"
+                p = multiprocessing.Process(
+                    target=worker,
+                    args=(role, worker_id, settings),
+                )
+                processes.append(p)
 
     # Start all processes
     for p in processes:
@@ -185,6 +229,7 @@ def run(
 def sender(
     coordinator: CoordT = False,
     num_pairs: NumPairsT = None,
+    receivers_per_sender: ReceiversPerSenderT = None,
     sender_bind: SenderBindT = None,
     coordinator_ip: CoordinatorIpT = None,
     short: ShortT = None,
@@ -196,6 +241,7 @@ def sender(
         role=Role.sender,
         coordinator=coordinator,
         num_pairs=num_pairs,
+        receivers_per_sender=receivers_per_sender,
         sender_bind=sender_bind,
         coordinator_ip=coordinator_ip,
         short=short,
@@ -208,6 +254,7 @@ def sender(
 def receiver(
     coordinator: CoordT = False,
     num_pairs: NumPairsT = None,
+    receivers_per_sender: ReceiversPerSenderT = None,
     sender_bind: SenderBindT = None,
     coordinator_ip: CoordinatorIpT = None,
     short: ShortT = None,
@@ -219,6 +266,7 @@ def receiver(
         role=Role.receiver,
         coordinator=coordinator,
         num_pairs=num_pairs,
+        receivers_per_sender=receivers_per_sender,
         sender_bind=sender_bind,
         coordinator_ip=coordinator_ip,
         short=short,

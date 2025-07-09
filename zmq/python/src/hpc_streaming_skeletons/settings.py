@@ -189,7 +189,12 @@ class BenchmarkSettings(BaseSettings):
 
     # Top-level benchmark settings
     num_pairs: int = Field(
-        default=1, description="Number of sender/receiver pairs to create"
+        default=1,
+        description="Number of groups to create (each group has 1 sender + N receivers)",
+    )
+    receivers_per_sender: int = Field(
+        default=1,
+        description="Number of receivers per sender (1 = one-to-one, >1 = one-to-many)",
     )
     short_test: bool = Field(
         default=False, description="Use a reduced test matrix for quick testing"
@@ -199,7 +204,14 @@ class BenchmarkSettings(BaseSettings):
     @classmethod
     def validate_num_pairs(cls, v: int) -> int:
         if v <= 0:
-            raise ValueError("Number of pairs must be positive")
+            raise ValueError("Number of groups must be positive")
+        return v
+
+    @field_validator("receivers_per_sender")
+    @classmethod
+    def validate_receivers_per_sender(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("Number of receivers per sender must be positive")
         return v
 
     def get_test_matrix(self) -> List[dict]:

@@ -63,7 +63,7 @@ class WorkerState(str, Enum):
 class Worker(WorkerCreate):
     id: bytes
     state: WorkerState = WorkerState.CONNECTING_TO_COORDINATOR
-    pair_id: bytes | None = None
+    group_id: int | None = None  # For group mode
     test_number: int | None = None
 
 
@@ -78,5 +78,12 @@ class Mode(str, Enum):
     worker = "worker"
 
 
-class SetupInfo(BaseModel):
+class GroupSetupInfo(BaseModel):
+    """Setup information for group mode"""
+
+    receiver_ports: list[
+        int
+    ]  # Individual ports for each receiver (when sender_bind=False)
     data_port: int
+    group_id: int
+    index: int  # index of the worker in the group
