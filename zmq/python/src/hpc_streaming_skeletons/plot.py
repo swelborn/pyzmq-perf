@@ -76,7 +76,6 @@ def plot(
                 )
             ],
             output_path=output_path or input_file.with_suffix(".png"),
-            show=show if show is not None else True,
             figsize=(10, 6),
         )
     else:
