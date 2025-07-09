@@ -188,11 +188,6 @@ def run(
             "✅ [bold green]Benchmark processes finished successfully[/bold green]"
         )
 
-        if coordinator:
-            console.print(
-                f"📄 Results saved to: [bold cyan]{settings.output.results_file}[/bold cyan]"
-            )
-
     except KeyboardInterrupt:
         console.print("🛑 [bold red]Benchmark interrupted by user[/bold red]")
         for p in processes:
