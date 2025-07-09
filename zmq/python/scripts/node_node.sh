@@ -14,6 +14,9 @@ echo "NUMA benchmark started at: $today_datetime"
 BASE_RESULTS_DIR="$HOME/pyzmq-bench-output/numa_$today_datetime"
 mkdir -p "$BASE_RESULTS_DIR"
 
+# Save a copy of this script for reproducibility
+cp "$CURRENT_DIR/node_node.sh" "$BASE_RESULTS_DIR/"
+
 # Get the hostnames of the allocated nodes
 nodes=$(scontrol show hostnames "$SLURM_NODELIST")
 nodes_array=($nodes)
@@ -26,6 +29,8 @@ echo "Sender node: $sender_node"
 
 coordinator_node_hostname=${coordinator_node}.chn.perlmutter.nersc.gov
 echo "Coordinator node hostname: $coordinator_node_hostname"
+
+send_recv_pairs=4
 
 # Function to run a single NUMA benchmark
 run_numa_benchmark() {
@@ -42,7 +47,7 @@ run_numa_benchmark() {
     
     # Create .env file for this benchmark
     echo "PYZMQ_BENCH_SHORT_TEST=false" > ".env"
-    echo "PYZMQ_BENCH_NUM_PAIRS=8" >> ".env"
+    echo "PYZMQ_BENCH_NUM_PAIRS=$send_recv_pairs" >> ".env"
     echo "PYZMQ_BENCH_NETWORK__COORDINATOR_IP=$coordinator_node_hostname" >> ".env"
     echo "PYZMQ_BENCH_NETWORK__COORDINATOR_ROUTER_PORT=5599" >> ".env"
     echo "PYZMQ_BENCH_NETWORK__COORDINATOR_PUB_PORT=5600" >> ".env"
@@ -122,18 +127,63 @@ run_numa_benchmark "2" "7" "coord_nic_sender_32"
 # Benchmark 8: Coordinator on 32 distance, Sender on NIC NUMA
 run_numa_benchmark "7" "2" "coord_32_sender_nic"
 
+# Generate YAML configuration file for plotting
+echo "Generating YAML configuration file for comparison plot..."
+YAML_CONFIG="$BASE_RESULTS_DIR/numa_comparison_config.yaml"
+cat > "$YAML_CONFIG" << EOF
+title: "Throughput Comparison: NUMA CPU Nodes ($send_recv_pairs send/recv pairs)"
+datasets:
+  - csv_file: "$BASE_RESULTS_DIR/baseline_no_numa/out/results.csv"
+    label: "No NUMA"
+    description: "Baseline with no NUMA binding"
+  - csv_file: "$BASE_RESULTS_DIR/both_numa_1/out/results.csv"
+    label: "Both NUMA 12"
+    description: "Both coordinator and sender on NUMA node 1 (12 distance)"
+  - csv_file: "$BASE_RESULTS_DIR/both_numa_2_nic/out/results.csv"
+    label: "Both NUMA 10"
+    description: "Both coordinator and sender on NUMA node 2 (NIC NUMA, 10 distance)"
+  - csv_file: "$BASE_RESULTS_DIR/both_numa_7/out/results.csv"
+    label: "Both NUMA 32"
+    description: "Both coordinator and sender on NUMA node 7 (32 distance)"
+  - csv_file: "$BASE_RESULTS_DIR/coord_12_sender_nic/out/results.csv"
+    label: "Recv NUMA 12, Send NUMA 10"
+    description: "Coordinator on NUMA 1 (12 distance), Sender on NUMA 2 (NIC)"
+  - csv_file: "$BASE_RESULTS_DIR/coord_32_sender_nic/out/results.csv"
+    label: "Recv NUMA 32, Send NUMA 10"
+    description: "Coordinator on NUMA 7 (32 distance), Sender on NUMA 2 (NIC)"
+  - csv_file: "$BASE_RESULTS_DIR/coord_nic_sender_12/out/results.csv"
+    label: "Recv NUMA 10, Send NUMA 12"
+    description: "Coordinator on NUMA 2 (NIC), Sender on NUMA 1 (12 distance)"
+  - csv_file: "$BASE_RESULTS_DIR/coord_nic_sender_32/out/results.csv"
+    label: "Recv NUMA 10, Send NUMA 32"
+    description: "Coordinator on NUMA 2 (NIC), Sender on NUMA 7 (32 distance)"
+output_path: "$BASE_RESULTS_DIR/numa_throughput_comparison.png"
+show: false
+figsize: [16, 10]
+EOF
+
+echo "YAML configuration saved to: $YAML_CONFIG"
+
+# Generate the comparison plot
+echo "Generating comparison plot..."
+cd "$CURRENT_DIR"
+pyzmq-bench plot "$YAML_CONFIG"
+
 # Generate summary report
 echo "=== NUMA Benchmark Summary ==="
 echo "Results saved in: $BASE_RESULTS_DIR"
 echo "Benchmark configurations:"
 echo "  - baseline_no_numa: No NUMA binding"
 echo "  - both_numa_1: Both on NUMA 1 (12 distance)"
-echo "  - both_numa_2_nic: Both on NUMA 2 (NIC NUMA)"
+echo "  - both_numa_2_nic: Both on NUMA 2 (NIC NUMA, 10 distance)"
 echo "  - both_numa_7: Both on NUMA 7 (32 distance)"
 echo "  - coord_nic_sender_12: Coordinator NIC, Sender 12 distance"
 echo "  - coord_12_sender_nic: Coordinator 12 distance, Sender NIC"
 echo "  - coord_nic_sender_32: Coordinator NIC, Sender 32 distance"
 echo "  - coord_32_sender_nic: Coordinator 32 distance, Sender NIC"
+echo ""
+echo "Comparison plot saved to: $BASE_RESULTS_DIR/numa_throughput_comparison.png"
+echo "YAML config saved to: $YAML_CONFIG"
 
 # Move SLURM output to results directory
 mv "$CURRENT_DIR/$SLURM_JOB_ID.out" "$BASE_RESULTS_DIR/"
