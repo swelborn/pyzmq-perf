@@ -175,9 +175,14 @@ def plot(
     # Combine all results
     agg_combined = pd.concat(all_aggs, ignore_index=True)
 
-    # --- Plotting ---
-    plt.figure(figsize=config.figsize)
+    # Calculate maximum throughput for each dataset for bar chart
+    max_throughput_per_dataset = agg_combined.groupby('source')['throughput_mbps'].max().reset_index()
+    max_throughput_per_dataset['throughput_gbps'] = max_throughput_per_dataset['throughput_mbps'] / 1000
 
+    # --- Create subplots: line plot and bar chart ---
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(config.figsize[0] * 2, config.figsize[1]))
+
+    # --- Line Plot (left subplot) ---
     # Create a combined grouping variable for legend
     agg_combined["group"] = (
         agg_combined["source"] + " - "
@@ -191,22 +196,39 @@ def plot(
         hue="group",
         marker="o",
         palette="Set1",
+        ax=ax1
     )
 
-    plt.xscale("log")
-    plt.yscale("log")
-    plt.xlabel("Message Size (bytes)")
-    plt.ylabel("Total Throughput (Mbps)")
-    plt.title(config.title)
-    plt.ylim(1, 100_000)  # 1 Mbps to 100 Gbps
-    plt.legend()
+    ax1.set_xscale("log")
+    ax1.set_yscale("log")
+    ax1.set_xlabel("Message Size (bytes)")
+    ax1.set_ylabel("Total Throughput (Mbps)")
+    ax1.set_title(f"{config.title} - Throughput vs Message Size")
+    ax1.set_ylim(1_000, 120_000)  # 1 Gbps to 120 Gbps
+    ax1.legend()
+
+    # --- Bar Chart (right subplot) ---
+    bars = ax2.bar(max_throughput_per_dataset['source'], max_throughput_per_dataset['throughput_gbps'], 
+                   color=sns.color_palette("Set1", len(max_throughput_per_dataset)))
+    
+    ax2.set_xlabel("Dataset")
+    ax2.set_ylabel("Maximum Throughput (Gbps)")
+    ax2.set_title("Maximum Throughput by Dataset")
+    ax2.tick_params(axis='x', rotation=45)
+    
+    # Add value labels on top of bars
+    for bar, value in zip(bars, max_throughput_per_dataset['throughput_gbps']):
+        height = bar.get_height()
+        ax2.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
+                f'{value:.0f} Gbps', ha='center', va='bottom', fontweight='bold')
+
     plt.tight_layout()
 
     # Always save the plot (output_path is guaranteed to be set)
-    plt.savefig(config.output_path, dpi=300, bbox_inches="tight")
+    fig.savefig(config.output_path, dpi=300, bbox_inches="tight")
     typer.echo(f"✅ Plot saved to {config.output_path}")
 
     if config.show:
         plt.show()
     else:
-        plt.close()
+        plt.close(fig)
