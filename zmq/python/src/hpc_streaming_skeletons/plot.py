@@ -1,48 +1,106 @@
 import ast
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 import typer
+import yaml
+from pydantic import BaseModel
 
 from hpc_streaming_skeletons.utils import calculate_throughput
 
 from .models import Role, TestConfig
 
 
+class DatasetConfig(BaseModel):
+    csv_file: Path
+    label: str
+    description: Optional[str] = None
+
+
+class PlotConfig(BaseModel):
+    title: str
+    datasets: List[DatasetConfig]
+    output_path: Optional[Path] = None
+    show: bool = True
+    figsize: tuple[float, float] = (10, 6)
+
+
 def plot(
-    csv_path: Path = typer.Argument(..., help="Path to the test results CSV file"),
+    input_file: Path = typer.Argument(..., help="Path to CSV file or YAML configuration file"),
     output_path: Optional[Path] = typer.Option(
         None,
         "--output",
         "-o",
-        help="Output file path for the plot (default: same as input with .png extension)",
+        help="Output file path for the plot (overrides config file setting)",
     ),
-    show: bool = typer.Option(
-        True, "--show/--no-show", help="Whether to show the plot"
-    ),
-    figsize: tuple[float, float] = typer.Option(
-        (10, 6), help="Figure size as width,height"
+    show: Optional[bool] = typer.Option(
+        None, "--show/--no-show", help="Whether to show the plot (overrides config file setting)"
     ),
 ) -> None:
     """
-    Create a log-log plot of throughput by message size, showing aggregate sender and receiver throughput.
+    Create a log-log plot of throughput by message size from CSV files.
 
-    This function reads test results from a CSV file and creates visualizations showing
-    true aggregate throughput (total messages / time from first start to last end)
-    for both senders and receivers separately.
+    This function can process either:
+    1. A single CSV file
+    2. A YAML configuration file that specifies multiple datasets to plot with custom labels
 
-    By default, the output PNG file will be saved in the same directory as the input CSV
-    with the same name but .png extension.
+    For CSV files, the function will generate a basic plot with default settings.
+    For YAML configuration files, you can specify multiple datasets, custom labels, and plot settings.
+
+    Example YAML configuration:
+    ```yaml
+    title: "Throughput Comparison: 12 vs 32 Senders"
+    datasets:
+      - csv_file: "/path/to/coord_nic_sender_12/out/results.csv"
+        label: "12 Senders"
+        description: "Coordinator with 12 sender pairs"
+      - csv_file: "/path/to/coord_nic_sender_32/out/results.csv"
+        label: "32 Senders"
+        description: "Coordinator with 32 sender pairs"
+    output_path: "/path/to/output.png"
+    show: false
+    figsize: [12, 8]
+    ```
     """
-    # Generate output path if not provided
-    if output_path is None:
-        output_path = csv_path.with_suffix(".png")
+    # Determine if input is CSV or YAML based on file extension
+    if input_file.suffix.lower() == '.csv':
+        # Create a default configuration for single CSV file
+        config = PlotConfig(
+            title="Throughput vs. Message Size",
+            datasets=[DatasetConfig(
+                csv_file=input_file,
+                label=input_file.stem,
+                description=f"Data from {input_file.name}"
+            )],
+            output_path=output_path or input_file.with_suffix(".png"),
+            show=show if show is not None else True,
+            figsize=(10, 6)
+        )
+    else:
+        # Assume YAML configuration file
+        with open(input_file, 'r') as f:
+            config_data = yaml.safe_load(f)
+        
+        config = PlotConfig(**config_data)
+        
+        # Override config with command line arguments if provided
+        if output_path is not None:
+            config.output_path = output_path
+        if show is not None:
+            config.show = show
+        
+        # Generate output path if not provided (use config file location as base)
+        if config.output_path is None:
+            config.output_path = input_file.with_suffix(".png")
+    
+    typer.echo(f"Processing {len(config.datasets)} datasets:")
+    for i, dataset in enumerate(config.datasets, 1):
+        typer.echo(f"  {i}. {dataset.label}: {dataset.csv_file}")
 
-    # Load data
-    df = pd.read_csv(csv_path)
+    typer.echo(f"Output will be saved to: {config.output_path}")
 
     # Parse config column
     def parse_config(cfg: str):
@@ -56,15 +114,8 @@ def plot(
             }
         )
 
-    df = df.join(df["config"].apply(parse_config))
-
-    df_group_by_test = df.groupby(["test_number", "size", "zero_copy"])
-
     def get_receivers(group):
         return group[group["role"] == Role.receiver.value]
-
-    def get_senders(group):
-        return group[group["role"] == Role.sender.value]
 
     # --- True Aggregate Throughput Calculation ---
     def calculate_true_aggregate(group: pd.DataFrame):
@@ -97,23 +148,44 @@ def plot(
             }
         )
 
-    agg = df_group_by_test.apply(
-        calculate_true_aggregate, include_groups=False
-    ).reset_index()
+    # Process each CSV file and collect aggregated results
+    all_aggs = []
+    for i, dataset in enumerate(config.datasets):
+        csv_path = dataset.csv_file
+        
+        # Load data
+        df = pd.read_csv(csv_path)
+        
+        # Parse config and join
+        df = df.join(df["config"].apply(parse_config))
+        
+        # Group by test parameters
+        df_group_by_test = df.groupby(["test_number", "size", "zero_copy"])
+        
+        # Calculate true aggregate throughput
+        agg = df_group_by_test.apply(
+            calculate_true_aggregate, include_groups=False
+        ).reset_index()
+        
+        # Add source label using the dataset label
+        agg["source"] = dataset.label
+        
+        all_aggs.append(agg)
+
+    # Combine all results
+    agg_combined = pd.concat(all_aggs, ignore_index=True)
 
     # --- Plotting ---
-    plt.figure(figsize=figsize)
+    plt.figure(figsize=config.figsize)
 
     # Create a combined grouping variable for legend
-    agg["group"] = (
-        agg["role"]
-        + " ("
-        + agg["zero_copy"].map({True: "zero_copy", False: "no_zero_copy"})
-        + ")"
+    agg_combined["group"] = (
+        agg_combined["source"] + " - "
+        + agg_combined["role"]
     )
 
     sns.lineplot(
-        data=agg,
+        data=agg_combined,
         x="size",
         y="throughput_mbps",
         hue="group",
@@ -125,16 +197,16 @@ def plot(
     plt.yscale("log")
     plt.xlabel("Message Size (bytes)")
     plt.ylabel("Total Throughput (Mbps)")
-    plt.title("Throughput Comparison: Role-based vs Aggregate vs Average (log-log)")
+    plt.title(config.title)
     plt.ylim(1, 100_000)  # 1 Mbps to 100 Gbps
-    plt.legend(title="Role & Zero Copy")
+    plt.legend()
     plt.tight_layout()
 
     # Always save the plot (output_path is guaranteed to be set)
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    typer.echo(f"Plot saved to {output_path}")
+    plt.savefig(config.output_path, dpi=300, bbox_inches="tight")
+    typer.echo(f"✅ Plot saved to {config.output_path}")
 
-    if show:
+    if config.show:
         plt.show()
     else:
         plt.close()

@@ -1,0 +1,11 @@
+title: "Hello"
+datasets:
+  - csv_file: "out/results1.csv"
+    label: "Results 1"
+    description: "Results 1"
+  - csv_file: "out/results2.csv"
+    label: "Results 2"
+    description: "Results 2"
+output_path: "out/throughput_comparison.png"
+show: false
+figsize: [12, 8]
