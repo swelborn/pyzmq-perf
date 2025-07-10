@@ -17,6 +17,7 @@ class CoordinationSignal(str, Enum):
     CONFIG = "CONFIG"
     START = "START"
     FINISH = "FINISH"
+    STOP_END_LOOP = "STOP_END_LOOP"
 
 
 class ReceiveCallback(str, Enum):

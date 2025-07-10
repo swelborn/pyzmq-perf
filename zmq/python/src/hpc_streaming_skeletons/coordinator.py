@@ -372,6 +372,11 @@ def coordinator(settings: "BenchmarkSettings", test_matrix: list[TestConfigCreat
         )
         logger.info("All workers have finished the test.")
 
+        pub_socket.send_multipart(
+            [CoordinationSignal.STOP_END_LOOP.value.encode(), b""]
+        )
+        logger.info("Sent STOP_END_LOOP signal to all workers.")
+
         save_results(
             [r.model_dump(mode="json") for r in test_results], file=results_file
         )

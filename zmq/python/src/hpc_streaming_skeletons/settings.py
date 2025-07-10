@@ -6,6 +6,7 @@ from typing import List
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .callbacks import CallbackSettings
 from .models import ReceiveCallback, TestConfigCreate
 
 
@@ -192,6 +193,9 @@ class BenchmarkSettings(BaseSettings):
     output: OutputSettings = Field(
         default_factory=OutputSettings, description="Output and results settings"
     )
+    callbacks: CallbackSettings = Field(
+        default_factory=CallbackSettings, description="Callback-specific settings"
+    )
 
     # Top-level benchmark settings
     num_pairs: int = Field(
@@ -229,7 +233,7 @@ class BenchmarkSettings(BaseSettings):
             pubs = [False]
             sndhwms = [100]
             rcvhwms = [100]
-            recv_callbacks = [ReceiveCallback.NONE]
+            recv_callbacks = [ReceiveCallback.WRITE_NPY]
         else:
             counts = self.test_matrix.message_counts
             sizes = self.test_matrix.get_filtered_message_sizes()

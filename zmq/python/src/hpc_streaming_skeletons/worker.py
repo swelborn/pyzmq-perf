@@ -1,16 +1,18 @@
 import json
 import logging
 import time
+from typing import TYPE_CHECKING, Callable
 
-# Import TYPE_CHECKING to avoid circular imports
-from typing import TYPE_CHECKING
-
+import numpy as np
 from rich.logging import RichHandler
 
 import zmq
-from hpc_streaming_skeletons.models import (
+
+from .callbacks import CallbackFactory
+from .models import (
     CoordinationSignal,
     GroupSetupInfo,
+    ReceiveCallback,
     Role,
     TestConfig,
     TestResult,
@@ -18,7 +20,7 @@ from hpc_streaming_skeletons.models import (
     WorkerState,
     WorkerUpdate,
 )
-from hpc_streaming_skeletons.utils import calculate_throughput
+from .utils import calculate_throughput
 
 if TYPE_CHECKING:
     from .settings import BenchmarkSettings
@@ -172,7 +174,10 @@ def worker(
 
         # Run test
         result_data = run_test(
-            role, config, data_socket, sub_socket, len(group_setup_info.receiver_ports)
+            role,
+            config,
+            data_socket,
+            settings,
         )
         result = TestResult(
             worker_id=worker_id,
@@ -199,14 +204,19 @@ def run_test(
     role: Role,
     config: TestConfig,
     data_socket: zmq.Socket,
-    sub_socket: zmq.Socket,
-    num_receivers: int = 1,
+    settings: "BenchmarkSettings",
 ):
-    data = b" " * config.size
     copy = not config.zero_copy
 
     def send():
-        start_time = 0.0
+        callback_to_msg: dict[ReceiveCallback, Callable[[int], bytes]] = {
+            ReceiveCallback.NONE: lambda size: b" " * size,
+            ReceiveCallback.WRITE_NPY: lambda size: np.random.randint(
+                0, 255, size, dtype=np.uint8
+            ).tobytes(),
+        }
+        msg = callback_to_msg[config.recv_callback](config.size)
+
         logger.debug(
             f"Starting to send {config.count} messages of size {config.size} bytes."
         )
@@ -214,7 +224,7 @@ def run_test(
         start_time = time.time()
 
         for _ in range(config.count):
-            data_socket.send(data, copy=copy)
+            data_socket.send(msg, copy=copy)
 
         end_time = time.time()
 
@@ -248,6 +258,9 @@ def run_test(
         }
 
     def receive():
+        # Create callback using the factory
+        callback = CallbackFactory.create_callback(config.recv_callback, settings)
+
         start_time = 0.0
         messages_received = 0
         first_message_received = False
@@ -266,6 +279,9 @@ def run_test(
                 # reliable because all the receivers may not get this START
                 start_time = time.time()
             messages_received += 1
+            callback(msg, messages_received, config)
+
+        callback.finalize()
 
         end_time = time.time()
         throughput = calculate_throughput(
