@@ -372,7 +372,9 @@ def coordinator(settings: "BenchmarkSettings", test_matrix: list[TestConfigCreat
         )
         logger.info("All workers have finished the test.")
 
-        save_results([r.model_dump() for r in test_results], file=results_file)
+        save_results(
+            [r.model_dump(mode="json") for r in test_results], file=results_file
+        )
         logger.info(f"Test complete. Collected and saved {len(test_results)} results.")
 
     # Signal end of tests
