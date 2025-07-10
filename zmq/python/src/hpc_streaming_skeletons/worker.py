@@ -114,6 +114,8 @@ def worker(
         topic, config_json = sub_socket.recv_multipart()
         if topic.decode() == CoordinationSignal.FINISH.value:
             break
+        if not topic.decode() == CoordinationSignal.CONFIG.value:
+            continue
 
         config = TestConfig(**json.loads(config_json.decode()))
         logger.debug("Received config.")
@@ -129,6 +131,7 @@ def worker(
         if role == Role.sender:
             data_socket = ctx.socket(zmq.PUB if config.pub else zmq.PUSH)
             data_socket.setsockopt(zmq.SNDHWM, config.sndhwm)
+            data_socket.setsockopt(zmq.LINGER, 0)
             if settings.worker.sender_bind:
                 # Sender binds to one port, all receivers connect to it
                 addr = f"tcp://*:{group_setup_info.data_port}"
@@ -193,11 +196,31 @@ def worker(
             result=result,
         )
         send_update(req_socket, worker_id, update)
-        data_socket.close()
         logger.info(f"Finished test {config.test_number} and sent results.")
 
+        # We need to send this END in a loop, because the receivers are not
+        # guaranteed to receive it (PUSH/PULL does not always evenly distribute)
+        # messages
+        if role == Role.sender:
+            logger.debug("Entering END message sending loop.")
+            while True:
+                try:
+                    data_socket.send(b"END", flags=zmq.NOBLOCK)
+                    time.sleep(0.001)
+                except zmq.Again:
+                    pass
+                try:
+                    signal, _ = sub_socket.recv_multipart(flags=zmq.NOBLOCK)
+                    if signal.decode() == CoordinationSignal.STOP_END_LOOP.value:
+                        logger.debug("Received STOP_END_LOOP signal.")
+                        break
+                except zmq.Again:
+                    continue
+
+        data_socket.close()
+
     logger.info("Shutting down.")
-    ctx.destroy()
+    ctx.destroy(linger=0)
 
 
 def run_test(
@@ -227,24 +250,6 @@ def run_test(
             data_socket.send(msg, copy=copy)
 
         end_time = time.time()
-
-        # Send END messages to signal completion (only needed when num_receivers > 1)
-        logger.debug(f"Sending END messages for {num_receivers} receivers.")
-        if config.pub:
-            # In Pub/Sub mode, send a single END message
-            data_socket.send(b"END", copy=copy)
-        else:
-            # In Push/Pull mode, send 10 * num_receivers END messages
-            for _ in range(10 * num_receivers):
-                try:
-                    data_socket.send(b"END", copy=copy, flags=zmq.NOBLOCK)
-                except zmq.Again as e:
-                    if "temporarily unavailable" in str(e):
-                        logger.debug(
-                            "No more receivers available to send END message, exiting."
-                        )
-                        # this mean that receivers are all finished
-                        break
 
         messages_sent = config.count
         throughput = calculate_throughput(
