@@ -2,14 +2,14 @@ import multiprocessing
 from typing import Annotated, Optional
 
 import typer
+from pydantic_settings import SettingsConfigDict
 from rich.console import Console
 
-from hpc_streaming_skeletons.coordinator import coordinator as _coordinator
-from hpc_streaming_skeletons.models import Role
-from hpc_streaming_skeletons.settings import BenchmarkSettings
-from hpc_streaming_skeletons.worker import worker
-
+from .coordinator import coordinator as _coordinator
+from .models import Role
 from .plot import plot
+from .settings import BenchmarkSettings
+from .worker import worker
 
 app = typer.Typer(
     help="HPC Streaming Skeletons: High-performance ZeroMQ benchmarking tool",
@@ -83,7 +83,6 @@ def run(
     # Load settings from environment/config file
     if config_file:
         # Create settings with custom env file
-        from pydantic_settings import SettingsConfigDict
 
         class CustomSettings(BenchmarkSettings):
             model_config = SettingsConfigDict(

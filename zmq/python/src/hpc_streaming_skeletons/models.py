@@ -91,9 +91,7 @@ class Mode(str, Enum):
 class GroupSetupInfo(BaseModel):
     """Setup information for group mode"""
 
-    receiver_ports: list[
-        int
-    ]  # Individual ports for each receiver (when sender_bind=False)
+    receiver_ports: list[int]
     data_port: int
     group_id: int
     index: int  # index of the worker in the group
