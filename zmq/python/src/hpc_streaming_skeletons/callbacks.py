@@ -50,9 +50,18 @@ class BufferedNpyCallback:
     """A stateful callback that buffers messages before writing to disk."""
 
     def __init__(
-        self, output_dir: Path, buffer_size: int, buffer_format: NpyCallbackBufferFormat
+        self, base_dir: Path, buffer_size: int, buffer_format: NpyCallbackBufferFormat
     ):
-        self.output_dir = output_dir
+        # Create worker-specific subdirectory
+        self.output_dir = base_dir / str(uuid.uuid4())
+
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to create output directory {self.output_dir}: {e}"
+            ) from e
+
         self.buffer_size = buffer_size
         self.buffer_format = buffer_format
 
@@ -61,11 +70,14 @@ class BufferedNpyCallback:
         self.buffer_start_message = 1
         self.file_counter = 0
         self.message_count_in_buffer = 0
+        self._test_number: Optional[int] = None
+        self._has_test_number = False
 
     def __call__(self, msg: bytes, message_number: int, config: TestConfig) -> None:
         # Store test number on first call since each callback handles only one test
-        if not hasattr(self, "_test_number"):
+        if not self._has_test_number:
             self._test_number = config.test_number
+            self._has_test_number = True
 
         # Add message to buffer
         self.message_buffer.extend(msg)
@@ -73,7 +85,7 @@ class BufferedNpyCallback:
 
         # Check if buffer should be flushed
         if self._should_flush_buffer():
-            self._flush_buffer(config.test_number)
+            self._flush_buffer()
             self._reset_buffer()
             self.file_counter += 1
             self.buffer_start_message = message_number + 1
@@ -85,21 +97,25 @@ class BufferedNpyCallback:
         self.message_buffer.clear()
         self.message_count_in_buffer = 0
 
-    def _flush_buffer(self, test_number: int) -> None:
-        """Flush the current message buffer to disk."""
-        if not self.message_buffer:
+    def _flush_buffer(self) -> None:
+        if not self.message_buffer or not self._has_test_number:
             return
-
         # Calculate end message number
         end_message = self.buffer_start_message + self.message_count_in_buffer - 1
 
         # Generate filename
         if self.buffer_start_message == end_message:
-            basename = f"test_{test_number:03d}_message_{self.buffer_start_message:06d}"
+            basename = (
+                f"test_{self._test_number:03d}_message_{self.buffer_start_message:06d}"
+            )
         else:
-            basename = f"test_{test_number:03d}_messages_{self.buffer_start_message:06d}_to_{end_message:06d}"
+            basename = f"test_{self._test_number:03d}_messages_{self.buffer_start_message:06d}_to_{end_message:06d}"
 
-        suffix = ".npy" if self.buffer_format == NpyCallbackBufferFormat.NPY else ".bin"
+        suffix_map = {
+            NpyCallbackBufferFormat.BINARY: ".bin",
+            NpyCallbackBufferFormat.NPY: ".npy",
+        }
+        suffix = suffix_map.get(self.buffer_format, ".bin")
         filename = f"{basename}_part_{self.file_counter:03d}{suffix}"
         filepath = self.output_dir / filename
 
@@ -116,8 +132,8 @@ class BufferedNpyCallback:
 
     def finalize(self) -> None:
         # Flush any remaining buffer using the stored test number
-        if hasattr(self, "_test_number") and self.message_buffer:
-            self._flush_buffer(self._test_number)
+        if self._has_test_number and self.message_buffer:
+            self._flush_buffer()
         self._reset_buffer()
 
 
@@ -154,19 +170,9 @@ class CallbackFactory:
                 "Numpy callback requires a base directory. Please set 'npy_base_directory' in settings."
             )
 
-        # Create worker-specific subdirectory
-        output_dir = base_dir / str(uuid.uuid4())
-
-        try:
-            output_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to create output directory {output_dir}: {e}"
-            ) from e
-
-        # Create buffered callback
+        # Create buffered callback (directory creation handled in constructor)
         callback = BufferedNpyCallback(
-            output_dir=output_dir,
+            base_dir=base_dir,
             buffer_size=settings.callbacks.npy_buffer_size_bytes,
             buffer_format=settings.callbacks.npy_buffer_format,
         )
