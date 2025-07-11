@@ -237,6 +237,9 @@ def run_test(
             ReceiveCallback.WRITE_NPY: lambda size: np.random.randint(
                 0, 255, size, dtype=np.uint8
             ).tobytes(),
+            ReceiveCallback.STREAMING_BINARY: lambda size: np.random.randint(
+                0, 255, size, dtype=np.uint8
+            ).tobytes(),
         }
         msg = callback_to_msg[config.recv_callback](config.size)
 

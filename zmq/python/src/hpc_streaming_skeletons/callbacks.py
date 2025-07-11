@@ -1,7 +1,7 @@
 import uuid
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Optional, Protocol
+from typing import TYPE_CHECKING, Annotated, BinaryIO, Optional, Protocol
 
 import numpy as np
 from pydantic import AfterValidator, BaseModel, Field
@@ -145,6 +145,67 @@ class NoneCallback:
         pass
 
 
+class StreamingBinaryCallback:
+    """A callback that writes messages to a single binary file."""
+
+    def __init__(self, base_dir: Path):
+        # Create worker-specific subdirectory
+        self.output_dir = base_dir / str(uuid.uuid4())
+
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to create output directory {self.output_dir}: {e}"
+            ) from e
+
+        # State variables
+        self._test_number: Optional[int] = None
+        self._has_test_number = False
+        self._file_handle: Optional[BinaryIO] = None
+        self._filepath: Optional[Path] = None
+
+    def __call__(self, msg: bytes, message_number: int, config: TestConfig) -> None:
+        # Store test number and open file on first call
+        if not self._has_test_number:
+            self._test_number = config.test_number
+            self._has_test_number = True
+            self._open_file()
+
+        # Write message immediately to file
+        if self._file_handle is not None:
+            try:
+                self._file_handle.write(msg)
+            except Exception as e:
+                raise RuntimeError(
+                    f"Failed to write message to {self._filepath}: {e}"
+                ) from e
+
+    def _open_file(self) -> None:
+        if not self._has_test_number:
+            return
+
+        filename = f"test_{self._test_number:03d}_streaming.bin"
+        self._filepath = self.output_dir / filename
+
+        try:
+            self._file_handle = open(self._filepath, "ab")
+        except Exception as e:
+            raise RuntimeError(f"Failed to open file {self._filepath}: {e}") from e
+
+    def finalize(self) -> None:
+        if self._file_handle is not None:
+            try:
+                self._file_handle.flush()
+                self._file_handle.close()
+            except Exception:
+                print(f"Error closing file {self._filepath}.")
+                pass
+            finally:
+                self._file_handle = None
+                self._filepath = None
+
+
 class CallbackFactory:
     @staticmethod
     def create_callback(
@@ -155,6 +216,8 @@ class CallbackFactory:
             return CallbackFactory._create_none_callback()
         elif callback_type == ReceiveCallback.WRITE_NPY:
             return CallbackFactory._create_npy_callback(settings)
+        elif callback_type == ReceiveCallback.STREAMING_BINARY:
+            return CallbackFactory._create_streaming_binary_callback(settings)
         else:
             raise ValueError(f"Unknown callback type: {callback_type}")
 
@@ -176,5 +239,20 @@ class CallbackFactory:
             buffer_size=settings.callbacks.npy_buffer_size_bytes,
             buffer_format=settings.callbacks.npy_buffer_format,
         )
+
+        return callback
+
+    @staticmethod
+    def _create_streaming_binary_callback(
+        settings: "BenchmarkSettings",
+    ) -> MessageCallback:
+        base_dir = settings.callbacks.npy_base_directory
+        if base_dir is None:
+            raise ValueError(
+                "Streaming binary callback requires a base directory. Please set 'npy_base_directory' in settings."
+            )
+
+        # Create streaming binary callback (directory creation handled in constructor)
+        callback = StreamingBinaryCallback(base_dir=base_dir)
 
         return callback

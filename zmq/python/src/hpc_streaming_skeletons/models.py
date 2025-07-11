@@ -23,6 +23,7 @@ class CoordinationSignal(str, Enum):
 class ReceiveCallback(str, Enum):
     NONE = "none"
     WRITE_NPY = "write_npy"
+    STREAMING_BINARY = "streaming_binary"
 
 
 class TestConfigCreate(BaseModel):
