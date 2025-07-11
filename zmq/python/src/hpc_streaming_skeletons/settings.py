@@ -1,13 +1,14 @@
 import logging
 from itertools import product
 from pathlib import Path
-from typing import List
+from typing import Annotated, List
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AfterValidator, BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .callbacks import CallbackSettings
 from .models import ReceiveCallback, TestConfigCreate
+from .validators import is_positive
 
 
 class LoggingSettings(BaseModel):
@@ -198,31 +199,17 @@ class BenchmarkSettings(BaseSettings):
     )
 
     # Top-level benchmark settings
-    num_pairs: int = Field(
+    num_pairs: Annotated[int, AfterValidator(is_positive)] = Field(
         default=1,
         description="Number of groups to create (each group has 1 sender + N receivers)",
     )
-    receivers_per_sender: int = Field(
+    receivers_per_sender: Annotated[int, AfterValidator(is_positive)] = Field(
         default=1,
         description="Number of receivers per sender (1 = one-to-one, >1 = one-to-many)",
     )
     short_test: bool = Field(
         default=False, description="Use a reduced test matrix for quick testing"
     )
-
-    @field_validator("num_pairs")
-    @classmethod
-    def validate_num_pairs(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError("Number of groups must be positive")
-        return v
-
-    @field_validator("receivers_per_sender")
-    @classmethod
-    def validate_receivers_per_sender(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError("Number of receivers per sender must be positive")
-        return v
 
     def get_test_matrix(self) -> List[TestConfigCreate]:
         if self.short_test:
