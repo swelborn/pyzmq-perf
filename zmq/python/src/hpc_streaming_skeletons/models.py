@@ -17,15 +17,26 @@ class CoordinationSignal(str, Enum):
     CONFIG = "CONFIG"
     START = "START"
     FINISH = "FINISH"
+    STOP_END_LOOP = "STOP_END_LOOP"
 
 
-class TestConfig(BaseModel):
+class ReceiveCallback(str, Enum):
+    NONE = "none"
+    WRITE_NPY = "write_npy"
+    STREAMING_BINARY = "streaming_binary"
+
+
+class TestConfigCreate(BaseModel):
     count: int  # number of messages to send
     size: int  # size of messages
     zero_copy: bool  # use pyzmq zero-copy
     pub: bool  # true, use pub/sub. false, use push/pull
     rcvhwm: int  # puller hwm
     sndhwm: int  # sender hwm
+    recv_callback: ReceiveCallback
+
+
+class TestConfig(TestConfigCreate):
     test_number: int
 
 
@@ -81,9 +92,7 @@ class Mode(str, Enum):
 class GroupSetupInfo(BaseModel):
     """Setup information for group mode"""
 
-    receiver_ports: list[
-        int
-    ]  # Individual ports for each receiver (when sender_bind=False)
+    receiver_ports: list[int]
     data_port: int
     group_id: int
     index: int  # index of the worker in the group

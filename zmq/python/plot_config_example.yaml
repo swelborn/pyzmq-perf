@@ -7,5 +7,4 @@ datasets:
     label: "Results 2"
     description: "Results 2"
 output_path: "out/throughput_comparison.png"
-show: false
 figsize: [12, 8]

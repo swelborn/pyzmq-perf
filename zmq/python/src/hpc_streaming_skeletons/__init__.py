@@ -2,14 +2,14 @@ import multiprocessing
 from typing import Annotated, Optional
 
 import typer
+from pydantic_settings import SettingsConfigDict
 from rich.console import Console
 
-from hpc_streaming_skeletons.coordinator import coordinator as _coordinator
-from hpc_streaming_skeletons.models import Role
-from hpc_streaming_skeletons.settings import BenchmarkSettings
-from hpc_streaming_skeletons.worker import worker
-
+from .coordinator import coordinator as _coordinator
+from .models import Role
 from .plot import plot
+from .settings import BenchmarkSettings
+from .worker import worker
 
 app = typer.Typer(
     help="HPC Streaming Skeletons: High-performance ZeroMQ benchmarking tool",
@@ -26,7 +26,7 @@ NumPairsT = Annotated[
 ]
 ReceiversPerSenderT = Annotated[
     Optional[int],
-    typer.Option(help="Number of receivers per sender (1 = pair mode, >1 = many-to-one mode)"),
+    typer.Option(help="Number of receivers per sender."),
 ]
 SenderBindT = Annotated[
     Optional[bool],
@@ -83,7 +83,6 @@ def run(
     # Load settings from environment/config file
     if config_file:
         # Create settings with custom env file
-        from pydantic_settings import SettingsConfigDict
 
         class CustomSettings(BenchmarkSettings):
             model_config = SettingsConfigDict(
@@ -159,45 +158,21 @@ def run(
         processes.append(coordinator_process)
 
     # Calculate total number of workers needed
-    if settings.receivers_per_sender == 1:
-        # Traditional pair mode
+    if role == Role.sender:
         total_workers = settings.num_pairs
-        console.print(
-            f"👥 Starting [bold cyan]{total_workers}[/bold cyan] [bold cyan]{role.value}[/bold cyan] worker(s)..."
+    else:  # Role.receiver
+        total_workers = settings.num_pairs * settings.receivers_per_sender
+
+    console.print(
+        f"👥 Starting [bold cyan]{total_workers}[/bold cyan] [bold cyan]{role.value}[/bold cyan] worker(s)..."
+    )
+    for i in range(total_workers):
+        worker_id = f"{role.value}-{i}"
+        p = multiprocessing.Process(
+            target=worker,
+            args=(role, worker_id, settings),
         )
-        for i in range(total_workers):
-            worker_id = f"{role.value}-{i}"
-            p = multiprocessing.Process(
-                target=worker,
-                args=(role, worker_id, settings),
-            )
-            processes.append(p)
-    else:
-        # Many-to-one mode
-        if role == Role.sender:
-            total_workers = settings.num_pairs
-            console.print(
-                f"👥 Starting [bold cyan]{total_workers}[/bold cyan] [bold cyan]{role.value}[/bold cyan] worker(s)..."
-            )
-            for i in range(total_workers):
-                worker_id = f"{role.value}-{i}"
-                p = multiprocessing.Process(
-                    target=worker,
-                    args=(role, worker_id, settings),
-                )
-                processes.append(p)
-        else:  # Role.receiver
-            total_workers = settings.num_pairs * settings.receivers_per_sender
-            console.print(
-                f"👥 Starting [bold cyan]{total_workers}[/bold cyan] [bold cyan]{role.value}[/bold cyan] worker(s)..."
-            )
-            for i in range(total_workers):
-                worker_id = f"{role.value}-{i}"
-                p = multiprocessing.Process(
-                    target=worker,
-                    args=(role, worker_id, settings),
-                )
-                processes.append(p)
+        processes.append(p)
 
     # Start all processes
     for p in processes:
@@ -211,11 +186,6 @@ def run(
         console.print(
             "✅ [bold green]Benchmark processes finished successfully[/bold green]"
         )
-
-        if coordinator:
-            console.print(
-                f"📄 Results saved to: [bold cyan]{settings.output.results_file}[/bold cyan]"
-            )
 
     except KeyboardInterrupt:
         console.print("🛑 [bold red]Benchmark interrupted by user[/bold red]")

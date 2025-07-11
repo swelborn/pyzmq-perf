@@ -21,7 +21,7 @@ from hpc_streaming_skeletons.models import (
 )
 from hpc_streaming_skeletons.utils import req_poll, validate_msg
 
-from .models import TestConfig
+from .models import TestConfig, TestConfigCreate
 
 if TYPE_CHECKING:
     from .settings import BenchmarkSettings
@@ -266,7 +266,7 @@ def save_settings(settings: "BenchmarkSettings", file: pathlib.Path):
     logger.info(f"Settings saved to {file}")
 
 
-def coordinator(settings: "BenchmarkSettings", test_matrix: list[dict]):
+def coordinator(settings: "BenchmarkSettings", test_matrix: list[TestConfigCreate]):
     logger = get_coordinator_logger(settings.logging.get_level_int())
     ctx = zmq.Context()
 
@@ -328,8 +328,8 @@ def coordinator(settings: "BenchmarkSettings", test_matrix: list[dict]):
     logger.info("Starting test execution loop.")
     test_results: list[TestResult] = []
 
-    for i, test_config_dict in enumerate(test_matrix):
-        config = TestConfig(test_number=i, **test_config_dict)
+    for i, test_config_create in enumerate(test_matrix):
+        config = TestConfig(test_number=i, **test_config_create.model_dump())
         logger.info(f"Running test: \n{config.model_dump_json(indent=2)}")
 
         # Distribute config
@@ -372,7 +372,14 @@ def coordinator(settings: "BenchmarkSettings", test_matrix: list[dict]):
         )
         logger.info("All workers have finished the test.")
 
-        save_results([r.model_dump() for r in test_results], file=results_file)
+        pub_socket.send_multipart(
+            [CoordinationSignal.STOP_END_LOOP.value.encode(), b""]
+        )
+        logger.info("Sent STOP_END_LOOP signal to all workers.")
+
+        save_results(
+            [r.model_dump(mode="json") for r in test_results], file=results_file
+        )
         logger.info(f"Test complete. Collected and saved {len(test_results)} results.")
 
     # Signal end of tests

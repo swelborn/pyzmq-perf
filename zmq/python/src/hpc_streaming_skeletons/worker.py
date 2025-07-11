@@ -1,16 +1,18 @@
 import json
 import logging
 import time
+from typing import TYPE_CHECKING, Callable
 
-# Import TYPE_CHECKING to avoid circular imports
-from typing import TYPE_CHECKING
-
+import numpy as np
 from rich.logging import RichHandler
 
 import zmq
-from hpc_streaming_skeletons.models import (
+
+from .callbacks import CallbackFactory
+from .models import (
     CoordinationSignal,
     GroupSetupInfo,
+    ReceiveCallback,
     Role,
     TestConfig,
     TestResult,
@@ -18,7 +20,7 @@ from hpc_streaming_skeletons.models import (
     WorkerState,
     WorkerUpdate,
 )
-from hpc_streaming_skeletons.utils import calculate_throughput
+from .utils import calculate_throughput
 
 if TYPE_CHECKING:
     from .settings import BenchmarkSettings
@@ -112,6 +114,8 @@ def worker(
         topic, config_json = sub_socket.recv_multipart()
         if topic.decode() == CoordinationSignal.FINISH.value:
             break
+        if not topic.decode() == CoordinationSignal.CONFIG.value:
+            continue
 
         config = TestConfig(**json.loads(config_json.decode()))
         logger.debug("Received config.")
@@ -127,6 +131,7 @@ def worker(
         if role == Role.sender:
             data_socket = ctx.socket(zmq.PUB if config.pub else zmq.PUSH)
             data_socket.setsockopt(zmq.SNDHWM, config.sndhwm)
+            data_socket.setsockopt(zmq.LINGER, 0)
             if settings.worker.sender_bind:
                 # Sender binds to one port, all receivers connect to it
                 addr = f"tcp://*:{group_setup_info.data_port}"
@@ -172,7 +177,10 @@ def worker(
 
         # Run test
         result_data = run_test(
-            role, config, data_socket, sub_socket, len(group_setup_info.receiver_ports)
+            role,
+            config,
+            data_socket,
+            settings,
         )
         result = TestResult(
             worker_id=worker_id,
@@ -188,25 +196,53 @@ def worker(
             result=result,
         )
         send_update(req_socket, worker_id, update)
-        data_socket.close()
         logger.info(f"Finished test {config.test_number} and sent results.")
 
+        # We need to send this END in a loop, because the receivers are not
+        # guaranteed to receive it (PUSH/PULL does not always evenly distribute)
+        # messages
+        if role == Role.sender:
+            logger.debug("Entering END message sending loop.")
+            while True:
+                try:
+                    data_socket.send(b"END", flags=zmq.NOBLOCK)
+                    time.sleep(0.001)
+                except zmq.Again:
+                    pass
+                try:
+                    signal, _ = sub_socket.recv_multipart(flags=zmq.NOBLOCK)
+                    if signal.decode() == CoordinationSignal.STOP_END_LOOP.value:
+                        logger.debug("Received STOP_END_LOOP signal.")
+                        break
+                except zmq.Again:
+                    continue
+
+        data_socket.close()
+
     logger.info("Shutting down.")
-    ctx.destroy()
+    ctx.destroy(linger=0)
 
 
 def run_test(
     role: Role,
     config: TestConfig,
     data_socket: zmq.Socket,
-    sub_socket: zmq.Socket,
-    num_receivers: int = 1,
+    settings: "BenchmarkSettings",
 ):
-    data = b" " * config.size
     copy = not config.zero_copy
 
     def send():
-        start_time = 0.0
+        callback_to_msg: dict[ReceiveCallback, Callable[[int], bytes]] = {
+            ReceiveCallback.NONE: lambda size: b" " * size,
+            ReceiveCallback.WRITE_NPY: lambda size: np.random.randint(
+                0, 255, size, dtype=np.uint8
+            ).tobytes(),
+            ReceiveCallback.STREAMING_BINARY: lambda size: np.random.randint(
+                0, 255, size, dtype=np.uint8
+            ).tobytes(),
+        }
+        msg = callback_to_msg[config.recv_callback](config.size)
+
         logger.debug(
             f"Starting to send {config.count} messages of size {config.size} bytes."
         )
@@ -214,27 +250,9 @@ def run_test(
         start_time = time.time()
 
         for _ in range(config.count):
-            data_socket.send(data, copy=copy)
+            data_socket.send(msg, copy=copy)
 
         end_time = time.time()
-
-        # Send END messages to signal completion (only needed when num_receivers > 1)
-        logger.debug(f"Sending END messages for {num_receivers} receivers.")
-        if config.pub:
-            # In Pub/Sub mode, send a single END message
-            data_socket.send(b"END", copy=copy)
-        else:
-            # In Push/Pull mode, send 10 * num_receivers END messages
-            for _ in range(10 * num_receivers):
-                try:
-                    data_socket.send(b"END", copy=copy, flags=zmq.NOBLOCK)
-                except zmq.Again as e:
-                    if "temporarily unavailable" in str(e):
-                        logger.debug(
-                            "No more receivers available to send END message, exiting."
-                        )
-                        # this mean that receivers are all finished
-                        break
 
         messages_sent = config.count
         throughput = calculate_throughput(
@@ -248,6 +266,9 @@ def run_test(
         }
 
     def receive():
+        # Create callback using the factory
+        callback = CallbackFactory.create_callback(config.recv_callback, settings)
+
         start_time = 0.0
         messages_received = 0
         first_message_received = False
@@ -266,6 +287,9 @@ def run_test(
                 # reliable because all the receivers may not get this START
                 start_time = time.time()
             messages_received += 1
+            callback(msg, messages_received, config)
+
+        callback.finalize()
 
         end_time = time.time()
         throughput = calculate_throughput(
